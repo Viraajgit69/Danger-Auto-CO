@@ -5,8 +5,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "send_otp" && message.telegramId) {
         sendOTPToTelegram(message.telegramId, sendResponse);
         return true; // Keep sendResponse alive for async request
-    } else if (message.action === "paymentSuccess") {
-        handlePaymentSuccess(message.cardDetails, message.amount);
     }
 });
 
