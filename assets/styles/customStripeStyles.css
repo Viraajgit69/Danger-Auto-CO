@@ -1,0 +1,15 @@
+:root {
+    --checkout-white: #2d2d33 !important;
+}
+
+.Text-color--gray600 {
+    color: #000000 !important;
+}
+
+.Text-color--gray800 {
+    color: #000000 !important;
+}
+
+.StripeElement {
+    background-color: #35353b !important;
+}
