@@ -1,4 +1,6 @@
 document.addEventListener("DOMContentLoaded", function () {
+  const BACKEND_URL = "http://46.202.163.22:3000/api";
+  
   // Preloader
   const preloader = document.getElementById("preloader");
   window.addEventListener("load", function () {
