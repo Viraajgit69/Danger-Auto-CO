@@ -1,0 +1,109 @@
+{
+  "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0JfYOoe/8Ii1dFZByYESgqFE3DasxSC2kAQ0sKxCrgX6rh4NOTN/AU4E9I9BIjeo3DL0DRIPH90uoxtSZf0cSZ9i3PccQ45w88X9whMwGrBU5t/O8qRbROwy+T1BJkbmI0GCnViAjtDMzDE1eYEeMnQNgwqMj42IHBn29RM7RYwnoJ+hnIyrE8OKjaPaW5G6oLjJmbPhP0UT6bNcDzRAz+eVajt77FzfHVQK6waQg/KdUQD6pxrx+nlzwC8nNN/MSBOPOFgNVc9lpi+vB6lo9vBbodkWxGLBrSgYudPcRrY7gDe5tPRrnyMk9A9qo+nt5AgAksZs+m4WSbO6h2iExQIDAQAB",
+  "name": "Danger Auto Checkouter",
+  "version": "1.4.1",
+  "description": "Automates Stripe checkout retries, logs card decline reasons, identifies successful transactions.",
+  "icons": {
+    "16": "assets/images/icon1.png",
+    "48": "assets/images/icon3.png"
+  },
+  "permissions": [
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider",
+    "storage",
+    "activeTab",
+    "tabs",
+    "downloads",
+    "scripting",
+    "declarativeNetRequest",
+    "alarms",
+    "management",
+    "notifications"
+    
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "*://*.stripe.com/*",
+    "http://*/*",
+    "https://*/*",
+    "*://62.169.27.88/*",
+    "*://172.84.76.210/*",
+    "*://*/cs_live_*",
+    "*://buy.stripe.com/*",
+    "https://api.telegram.org/*"
+  ],
+  "background": {
+    "service_worker": "scripts/background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*/*cs_live_*",
+        "https://buy.stripe.com/*",
+        "*://*/*checkout/*",
+        "*://*/*checkout/session/*"
+      ],
+      "all_frames": true,
+      "js": ["scripts/data/datainjector.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*/*cs_live_*",
+        "https://buy.stripe.com/*",
+        "*://*/*checkout/*",
+        "*://*/*checkout/session/*"
+      ],
+      "all_frames": true,
+      "js": ["scripts/data/injectpayment.js", "scripts/responses/responseinterceptor.js"],
+      "css": ["assets/styles/customStripeStyles.css"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://*/*cs_live_*",
+        "https://buy.stripe.com/*",
+        "*://*/*checkout/*",
+        "*://*/*checkout/session/*"
+      ],
+      "all_frames": true,
+      "js": ["scripts/payment/paymentcontent.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*/*cs_live_*",
+        "https://buy.stripe.com/*",
+        "*://*/*checkout/*",
+        "*://*/*checkout/session/*"
+      ],
+      "type": "module",
+      "js": [
+        "scripts/autofill/autofill.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "Danger Auto Checkouter"
+  },
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+	    "scripts/payment/paymentcontent.js",
+		"assets/sounds/hit_sound.mp3",
+        "assets/images/icon1.png",
+        "assets/images/icon3.png"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

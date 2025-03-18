@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Danger Auto Checkouter - Settings</title>
+    <link rel="stylesheet" href="/assets/styles/settings.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <style>
+      .bin-inputs-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-top: 20px;
+      }
+      .bin-inputs-container .input-group {
+        flex: 1;
+        min-width: 300px;
+      }
+      @media (max-width: 768px) {
+        .bin-inputs-container {
+          flex-direction: column;
+        }
+        .bin-inputs-container .input-group {
+          min-width: 100%;
+        }
+      }
+    </style>   
+  </head>
+  <body>
+    
+    <div id="preloader">
+      <div class="preloader-content">
+        <div class="preloader-logo">
+          <i class="fas fa-bolt"></i>
+        </div>
+        <div class="preloader-spinner">
+          <div class="spinner-ring"></div>
+        </div>
+        <h2 class="preloader-title">Danger Auto Co</h2>
+        <div class="preloader-version">v1.4.1</div>
+        <p class="preloader-text">Loading awesome features...</p>
+      </div>
+    </div>
+
+    <div class="notifications-container"></div>
+
+    <div class="app-container">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo-section">
+            <div class="logo-icon">
+              <i class="fas fa-bolt"></i>
+            </div>
+            <h1><br /></h1>
+            <div class="header-divider"></div>
+          </div>
+          <div class="extension-toggle">
+            <label class="switch">
+              <input type="checkbox" id="extension-toggle-input" />
+              <span class="switch-slider round"></span>
+            </label>
+            <span class="toggle-label" id="toggle-status-label"
+              >Start Hitting When? ❌</span
+            >
+          </div>
+        </div>
+        <nav class="sidebar-nav">
+          <button id="bin-toggle" class="nav-button active">
+            <i class="fas fa-credit-card"></i>
+            BIN
+          </button>
+          <button id="cc-toggle" class="nav-button">
+            <i class="fas fa-list"></i>
+            CC List
+          </button>
+          <button id="telegram-toggle" class="nav-button">
+            <i class="fab fa-telegram"></i>
+            Telegram
+          </button>
+          <button id="email-toggle" class="nav-button">
+            <i class="fas fa-envelope"></i>
+            Email
+          </button>
+          <button id="proxy-toggle" class="nav-button">
+            <i class="fas fa-network-wired"></i>
+            Proxy
+          </button>
+          <button id="bins-hub-toggle" class="nav-button">
+            <i class="fas fa-database"></i>
+            Bins Hub
+          </button>
+          <button id="watermark-toggle" class="nav-button">
+            <i class="fa-solid fa-paintbrush"></i>
+            Watermark
+          </button>
+        </nav>
+      </div>
+
+      <div class="main-content">
+        <div class="top-bar">
+          <div class="top-bar-title">
+            <i class="fas fa-robot"></i>
+            <span>Danger Auto Co</span>
+            <div class="version-tag">v1.4.1</div>
+          </div>
+          <a href="#" class="join-telegram-btn">
+            <i class="fab fa-telegram"></i>
+            Join Telegram
+          </a>
+        </div>
+
+        <div class="settings-container">
+          <p class="settings-note">
+            Configure your settings below. Note: Saving settings requires
+            Telegram verification.
+          </p>
+
+          <div id="bin-section" class="settings-section active-section">
+            <h2><i class="fas fa-credit-card"></i> BIN Settings</h2>
+            <p class="section-description">
+              Enter your Primary and Secondary BINs below. You can switch
+              between them during checkout using the action button.
+            </p>
+            <div class="bin-inputs-container">
+              <div class="input-group">
+                <label for="primary-bin-input">Primary BIN:</label>
+                <div class="input-with-tooltip">
+                  <input
+                    type="text"
+                    id="primary-bin-input"
+                    placeholder="e.g., 440393 (Primary BIN)"
+                  />
+                </div>
+              </div>
+              <div class="input-group">
+                <label for="secondary-bin-input">Secondary BIN:</label>
+                <div class="input-with-tooltip">
+                  <input
+                    type="text"
+                    id="secondary-bin-input"
+                    placeholder="e.g., 515434 (Secondary BIN)"
+                  />
+                </div>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button id="save-settings" class="main-button">
+                Save Settings
+              </button>
+              <button id="history-button" class="main-button">
+                View History
+              </button>
+            </div>
+          </div>
+
+          <div id="cc-section" class="settings-section">
+            <div class="input-group">
+              <label for="card-list-input"
+                >Enter Card List (max 15, one per line):</label
+              >
+              <div class="input-with-tooltip">
+                <textarea
+                  id="card-list-input"
+                  placeholder="e.g., 4117704096191910|10|2028|216"
+                ></textarea>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button id="save-settings-cc" class="main-button">
+                Save Settings
+              </button>
+              <button id="history-button-cc" class="main-button">
+                View History
+              </button>
+            </div>
+          </div>
+
+          <div id="telegram-section" class="settings-section">
+            <div class="verification-banner">
+              <h2>Verify with our Telegram Bot</h2>
+              <a
+                href="https://t.me/DANGERZONE7"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="verify-button"
+              >
+                <i class="fas fa-arrow-right"></i> Verify
+              </a>
+            </div>
+            <div class="instructions">
+              <div class="instruction-step">
+                <div class="step-number">1</div>
+                <h3>Start the Bot</h3>
+                <p>Click the button above to open our Telegram bot.</p>
+              </div>
+              <div class="instruction-step">
+                <div class="step-number">2</div>
+                <h3>Get Your Telegram ID</h3>
+                <p>Start The Bot and type /id copy your Telegram ID.</p>
+              </div>
+              <div class="instruction-step">
+                <div class="step-number">3</div>
+                <h3>Enter ID & Request OTP</h3>
+                <p>Enter your ID below and click 'Send OTP'.</p>
+              </div>
+            </div>
+            <div class="input-group">
+              <label for="telegram-id-input">Enter Your Telegram ID:</label>
+              <div class="input-with-tooltip">
+                <input
+                  type="text"
+                  id="telegram-id-input"
+                  placeholder="e.g., 123456789"
+                />
+              </div>
+            </div>
+            <div class="input-group">
+              <label for="otp-input">Enter OTP:</label>
+              <div class="input-with-tooltip">
+                <input type="text" id="otp-input" placeholder="Enter OTP" />
+              </div>
+            </div>
+            <div class="input-group">
+              <label for="auto-screenshot-toggle"
+                >Auto Screenshot to Telegram:</label
+              >
+              <label class="switch">
+                <input type="checkbox" id="auto-screenshot-toggle" />
+                <span class="switch-slider round"></span>
+              </label>
+            </div>
+            <div class="buttons-group">
+              <button id="send-otp" class="secondary-button">Send OTP</button>
+              <button id="verify-otp" class="secondary-button">
+                Verify OTP
+              </button>
+            </div>
+            <div class="section-actions">
+              <button id="save-settings-telegram" class="main-button">
+                Save Settings
+              </button>
+            </div>
+          </div>
+
+          <div id="email-section" class="settings-section">
+            <div class="input-group">
+              <label for="email-input">Enter Your Email:</label>
+              <div class="input-with-tooltip">
+                <input
+                  type="email"
+                  id="email-input"
+                  placeholder="e.g., example@gmail.com"
+                />
+              </div>
+            </div>
+            <div class="section-actions">
+              <button id="save-settings-email" class="main-button">
+                Save Settings
+              </button>
+            </div>
+          </div>
+
+          <div id="proxy-section" class="settings-section">
+            <div class="input-group">
+              <label for="proxy-input">Enter Proxy Details:</label>
+              <div class="input-with-tooltip">
+                <input
+                  type="text"
+                  id="proxy-input"
+                  placeholder="e.g., 123.456.789.012:8080 or user:pass@123.456.789.012:8080"
+                />
+              </div>
+            </div>
+            <div class="section-actions">
+              <button id="save-settings-proxy" class="main-button">
+                Save Settings
+              </button>
+            </div>
+          </div>
+
+          <div id="bins-hub-section" class="settings-section">
+            <h2>
+              <i class="fas fa-database"></i>
+              Bins Archive
+            </h2>
+            <div id="bins-container" class="bins-container">
+              <!-- Bins will be loaded here -->
+            </div>
+            <div class="section-actions">
+              <button id="refresh-bins" class="main-button">
+                <i class="fas fa-sync-alt"></i> Refresh Bins
+              </button>
+            </div>
+          </div>
+			
+          <div id="watermark-section" class="settings-section">
+            <h2>Watermark Settings</h2>
+            <div class="input-group">
+              <label for="watermark-name-input">Watermark Name:</label>
+              <input
+                type="text"
+                id="watermark-name-input"
+                placeholder="Enter watermark name"
+              />
+            </div>
+            <div class="input-group">
+              <label for="watermark-color-input">Watermark Color:</label>
+              <input type="color" id="watermark-color-input" value="#2412e6" />
+            </div>
+            <div class="input-group">
+              <label for="watermark-concentration-input"
+                >Watermark Concentration:</label>
+              <input
+                type="number"
+                id="watermark-concentration-input"
+                placeholder="Enter concentration (0-100)"
+                min="0"
+                max="100"
+              />
+            </div>
+            <div class="section-actions">
+              <button id="save-watermark-settings" class="main-button">
+                Save Watermark Settings
+              </button>
+            </div>
+          </div>
+
+          <p id="status-message"></p>
+        </div>
+      </div>
+    </div>
+
+
+    <div id="history-modal" class="modal">
+      <div class="modal-content">
+        <span class="close-history-button close-button"
+          ><i class="fas fa-times"></i
+        ></span>
+        <h2>Payment History</h2>
+        <div id="history-list"></div>
+        <div class="history-actions">
+          <button id="clear-all-history" class="history-button">
+            Clear All
+          </button>
+        </div>
+      </div>
+    </div>
+   
+    <script src="/scripts/settings/settings.js"></script>
+  </body>
+</html>
