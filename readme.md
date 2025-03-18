@@ -2,7 +2,7 @@
 
 <div align="center">
   <img src="assets/images/icon3.png" alt="Extension Logo" width="150">
-  <h1>Propaganda Auto Checkouter</h1>
+  <h1>Danger Auto Checkouter</h1>
   <p>Advanced Checkout Automation Service</p>
 
   ![Release](https://img.shields.io/badge/Release-v1.4.1-red.svg?style=for-the-badge)
