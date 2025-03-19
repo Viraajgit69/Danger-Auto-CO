@@ -1,123 +1,261 @@
 console.log("💳 Card Injection Script Loaded");
 
-// Configuration for field selectors specific to card injection
-const cardFieldSelectors = {
-    number: [
-        'input[data-elements-stable-field-name*="cardNumber"]',
-        'input[name*="card-number"]',
-        'input[placeholder*="card number"]',
-        'input[aria-label*="card number"]'
-    ],
-    expiry: [
-        'input[data-elements-stable-field-name*="cardExpiry"]',
-        'input[name*="expir"]',
-        'input[placeholder*="MM/YY"]',
-        'input[aria-label*="expiration"]'
-    ],
-    cvc: [
-        'input[data-elements-stable-field-name*="cardCvc"]',
-        'input[name*="cvc"]',
-        'input[name*="cvv"]',
-        'input[placeholder*="CVC"]',
-        'input[aria-label*="security code"]'
-    ]
+// Configuration for injection settings and selectors
+const CONFIG = {
+    selectors: {
+        stripe: {
+            number: [
+                'input[data-elements-stable-field-name*="cardNumber"]',
+                'input[name*="cardnumber"]',
+                'input[name*="card-number"]',
+                'input[placeholder*="card number"]',
+                'input[id*="card"]',
+                'input[aria-label*="card number"]'
+            ],
+            expiry: [
+                'input[data-elements-stable-field-name*="cardExpiry"]',
+                'input[name*="exp-date"]',
+                'input[name*="expiry"]',
+                'input[placeholder*="MM/YY"]',
+                'input[id*="exp"]',
+                'input[aria-label*="expiration"]'
+            ],
+            cvc: [
+                'input[data-elements-stable-field-name*="cardCvc"]',
+                'input[name*="cvc"]',
+                'input[name*="cvv"]',
+                'input[placeholder*="CVC"]',
+                'input[id*="cvc"]',
+                'input[aria-label*="security code"]'
+            ],
+            name: [
+                'input[placeholder*="card holder"]',
+                'input[name*="holdername"]',
+                'input[name="name"]',
+                'input[id*="name"]',
+                'input[aria-label*="name on card"]'
+            ]
+        }
+    },
+    defaults: {
+        bin: "48478345",
+        expiryMinMonths: 12,
+        expiryMaxMonths: 36,
+        retryAttempts: 3,
+        retryDelay: 100,
+        initialDelay: 2000
+    },
+    debug: false
+};
+
+// Storage Management System
+const StorageManager = {
+    async get(keys) {
+        return new Promise((resolve) => {
+            try {
+                if (chrome?.storage?.local) {
+                    chrome.storage.local.get(keys, resolve);
+                } else if (chrome?.storage?.sync) {
+                    chrome.storage.sync.get(keys, resolve);
+                } else {
+                    console.warn("⚠️ No storage available, using defaults");
+                    resolve({});
+                }
+            } catch (error) {
+                console.warn("⚠️ Storage access failed:", error);
+                resolve({});
+            }
+        });
+    },
+
+    async set(data) {
+        return new Promise((resolve) => {
+            try {
+                if (chrome?.storage?.local) {
+                    chrome.storage.local.set(data, resolve);
+                } else if (chrome?.storage?.sync) {
+                    chrome.storage.sync.set(data, resolve);
+                } else {
+                    console.warn("⚠️ No storage available");
+                    resolve();
+                }
+            } catch (error) {
+                console.warn("⚠️ Storage write failed:", error);
+                resolve();
+            }
+        });
+    }
 };
 
 // BIN Management System
 const BINManager = {
     async getCurrentBIN() {
-        return new Promise((resolve) => {
-            chrome.storage.sync.get(["primaryBIN", "secondaryBIN", "currentBIN"], function(result) {
-                const currentBINType = result.currentBIN || "primary";
-                const bin = currentBINType === "primary" ? result.primaryBIN : result.secondaryBIN;
-                
-                if (!bin) {
-                    console.warn("⚠️ No BIN found, using fallback");
-                    resolve("48478345"); // Fallback BIN
-                    return;
-                }
-                
-                console.log(`✅ Using ${currentBINType} BIN`);
-                resolve(bin);
-            });
-        });
+        try {
+            const result = await StorageManager.get(["primaryBIN", "secondaryBIN", "currentBIN"]);
+            const currentBINType = result.currentBIN || "primary";
+            const bin = currentBINType === "primary" ? result.primaryBIN : result.secondaryBIN;
+            
+            if (!bin) {
+                return CONFIG.defaults.bin;
+            }
+            
+            return bin;
+        } catch (error) {
+            console.warn("⚠️ BIN retrieval failed:", error);
+            return CONFIG.defaults.bin;
+        }
     },
 
-    async switchBIN() {
-        return new Promise((resolve) => {
-            chrome.storage.sync.get(["currentBIN"], function(result) {
-                const newBINType = result.currentBIN === "primary" ? "secondary" : "primary";
-                chrome.storage.sync.set({ currentBIN: newBINType }, function() {
-                    console.log(`🔄 Switched to ${newBINType} BIN`);
-                    resolve(newBINType);
-                });
-            });
-        });
+    async toggleBIN() {
+        try {
+            const result = await StorageManager.get(["primaryBIN", "secondaryBIN", "currentBIN"]);
+            const currentType = result.currentBIN || "primary";
+            const newType = currentType === "primary" ? "secondary" : "primary";
+            
+            if (!result[`${newType}BIN`]) {
+                console.warn(`⚠️ No ${newType} BIN configured`);
+                return false;
+            }
+            
+            await StorageManager.set({ currentBIN: newType });
+            return true;
+        } catch (error) {
+            console.error("❌ BIN switch failed:", error);
+            return false;
+        }
     }
 };
 
-// Card Generation System
+// Card Generator System
 const CardGenerator = {
     generateLuhn(partial) {
         let sum = 0;
         let alternate = false;
+        
+        // Process in reverse to handle length-16 numbers
         for (let i = partial.length - 1; i >= 0; i--) {
-            let n = parseInt(partial[i], 10);
+            let digit = parseInt(partial[i], 10);
+            
             if (alternate) {
-                n *= 2;
-                if (n > 9) n -= 9;
+                digit *= 2;
+                if (digit > 9) {
+                    digit -= 9;
+                }
             }
-            sum += n;
+            
+            sum += digit;
             alternate = !alternate;
         }
-        return (sum * 9) % 10;
+        
+        return ((Math.floor(sum / 10) + 1) * 10 - sum) % 10;
+    },
+
+    validateCardNumber(number) {
+        if (!/^\d{16}$/.test(number)) {
+            return false;
+        }
+        
+        let sum = 0;
+        let alternate = false;
+        
+        for (let i = number.length - 1; i >= 0; i--) {
+            let digit = parseInt(number[i], 10);
+            
+            if (alternate) {
+                digit *= 2;
+                if (digit > 9) {
+                    digit -= 9;
+                }
+            }
+            
+            sum += digit;
+            alternate = !alternate;
+        }
+        
+        return (sum % 10) === 0;
     },
 
     async generateCard() {
-        const bin = await BINManager.getCurrentBIN();
-        let cardNumber = bin;
-        const remainingLength = 16 - bin.length;
-        
-        for (let i = 0; i < remainingLength - 1; i++) {
-            cardNumber += Math.floor(Math.random() * 10);
+        try {
+            // Get current BIN
+            const bin = await BINManager.getCurrentBIN();
+            let cardNumber = bin;
+            const remainingLength = 16 - bin.length;
+            
+            // Generate remaining digits
+            for (let i = 0; i < remainingLength - 1; i++) {
+                cardNumber += Math.floor(Math.random() * 10);
+            }
+            
+            // Add Luhn check digit
+            cardNumber += this.generateLuhn(cardNumber);
+            
+            // Validate the generated number
+            if (!this.validateCardNumber(cardNumber)) {
+                throw new Error("Generated card number failed validation");
+            }
+            
+            return {
+                number: cardNumber,
+                expiry: this.generateExpiry(),
+                cvc: this.generateCVC()
+            };
+        } catch (error) {
+            console.error("❌ Card generation failed:", error);
+            return null;
         }
-        
-        cardNumber += this.generateLuhn(cardNumber);
-        return {
-            number: cardNumber,
-            expiry: this.generateExpiry(),
-            cvc: this.generateCVC()
-        };
     },
 
     generateExpiry() {
-        const currentDate = new Date();
-        const month = Math.floor(Math.random() * 12) + 1;
-        const year = currentDate.getFullYear() + Math.floor(Math.random() * 2) + 1;
-        return `${month.toString().padStart(2, '0')}${(year % 100).toString().padStart(2, '0')}`;
+        const now = new Date();
+        const minMonths = CONFIG.defaults.expiryMinMonths;
+        const maxMonths = CONFIG.defaults.expiryMaxMonths;
+        
+        // Generate a future date between min and max months
+        const monthsToAdd = Math.floor(Math.random() * (maxMonths - minMonths + 1)) + minMonths;
+        const futureDate = new Date(now.getFullYear(), now.getMonth() + monthsToAdd, 1);
+        
+        const month = (futureDate.getMonth() + 1).toString().padStart(2, '0');
+        const year = (futureDate.getFullYear() % 100).toString().padStart(2, '0');
+        
+        return `${month}/${year}`;
     },
 
     generateCVC() {
-        return Math.floor(100 + Math.random() * 900).toString();
+        return Math.floor(100 + Math.random() * 900).toString().padStart(3, '0');
     }
 };
 
 // Field Injection System
 const FieldInjector = {
-    injectValue(element, value) {
-        if (!element) return false;
+    async injectValue(element, value, maxRetries = CONFIG.defaults.retryAttempts) {
+        if (!element || !value) return false;
         
-        try {
-            element.focus();
-            element.value = value;
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-            element.dispatchEvent(new Event('blur', { bubbles: true }));
-            return true;
-        } catch (error) {
-            console.error("❌ Injection failed:", error);
-            return false;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                element.focus();
+                element.value = value;
+                
+                // Dispatch events in sequence
+                ['input', 'change', 'blur'].forEach(eventType => {
+                    element.dispatchEvent(new Event(eventType, { bubbles: true }));
+                });
+                
+                // Verify injection
+                if (element.value === value) {
+                    return true;
+                }
+                
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, CONFIG.defaults.retryDelay));
+            } catch (error) {
+                if (CONFIG.debug) {
+                    console.warn(`⚠️ Injection attempt ${attempt + 1} failed:`, error);
+                }
+            }
         }
+        
+        return false;
     },
 
     findField(selectors, document) {
@@ -131,49 +269,63 @@ const FieldInjector = {
     async injectCardDetails() {
         try {
             console.log("🎯 Starting card detail injection");
-            const card = await CardGenerator.generateCard();
             
-            // Handle both main document and iframes
-            const contexts = [document, ...Array.from(document.querySelectorAll('iframe'))
-                .map(iframe => {
-                    try {
-                        return iframe.contentDocument || iframe.contentWindow.document;
-                    } catch (e) {
-                        return null;
-                    }
-                }).filter(doc => doc)];
+            // Generate card details
+            const card = await CardGenerator.generateCard();
+            if (!card) {
+                throw new Error("Failed to generate valid card");
+            }
+            
+            // Get all possible injection contexts
+            const contexts = [
+                document,
+                ...Array.from(document.querySelectorAll('iframe'))
+                    .map(iframe => {
+                        try {
+                            return iframe.contentDocument || iframe.contentWindow.document;
+                        } catch (e) {
+                            return null;
+                        }
+                    })
+                    .filter(Boolean)
+            ];
 
+            let injectedFields = 0;
+            
+            // Attempt injection in each context
             for (let doc of contexts) {
-                // Inject card number
-                const numberField = this.findField(cardFieldSelectors.number, doc);
-                if (numberField && this.injectValue(numberField, card.number)) {
-                    console.log("💳 Card number injected:", card.number);
-                }
-
-                // Inject expiry
-                const expiryField = this.findField(cardFieldSelectors.expiry, doc);
-                if (expiryField && this.injectValue(expiryField, card.expiry)) {
-                    console.log("📅 Expiry date injected:", card.expiry);
-                }
-
-                // Inject CVC
-                const cvcField = this.findField(cardFieldSelectors.cvc, doc);
-                if (cvcField && this.injectValue(cvcField, card.cvc)) {
-                    console.log("🔒 CVC injected:", card.cvc);
+                for (let [fieldType, value] of Object.entries({
+                    number: card.number,
+                    expiry: card.expiry,
+                    cvc: card.cvc
+                })) {
+                    const field = this.findField(CONFIG.selectors.stripe[fieldType], doc);
+                    if (field && await this.injectValue(field, value)) {
+                        console.log(`✅ Injected ${fieldType}: ${value}`);
+                        injectedFields++;
+                    }
                 }
             }
+
+            if (injectedFields === 0) {
+                throw new Error("No fields were injected successfully");
+            }
+
+            return true;
         } catch (error) {
             console.error("❌ Card injection failed:", error);
+            return false;
         }
     }
 };
 
-// Keyboard Shortcuts
+// Initialize event listeners
 document.addEventListener('keydown', async function(e) {
     // Alt+B to switch BIN
     if (e.altKey && e.key === 'b') {
-        await BINManager.switchBIN();
-        await FieldInjector.injectCardDetails();
+        if (await BINManager.toggleBIN()) {
+            await FieldInjector.injectCardDetails();
+        }
     }
     // Alt+I to inject card details
     else if (e.altKey && e.key === 'i') {
@@ -181,7 +333,13 @@ document.addEventListener('keydown', async function(e) {
     }
 });
 
-// Initial injection attempt
-setTimeout(() => FieldInjector.injectCardDetails(), 2000);
+// Initial injection attempt with delay
+setTimeout(async () => {
+    try {
+        await FieldInjector.injectCardDetails();
+    } catch (error) {
+        console.error("❌ Initial injection failed:", error);
+    }
+}, CONFIG.defaults.initialDelay);
 
 console.log("✅ Card injection script ready (Alt+I to inject, Alt+B to switch BIN)");
