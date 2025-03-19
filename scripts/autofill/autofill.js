@@ -3,8 +3,9 @@ console.log("✅ Autofill script loaded.");
 // Configuration object for selectors and default values
 const config = {
     fields: {
-        // Comprehensive field selectors from your working script
+        // Billing/Shipping Information
         billingName: 'input[name="billingName"], input[name="name"], input[autocomplete*="name"], input[id*="name"]',
+        cardholderName: 'input[placeholder*="card holder"], input[placeholder*="cardholder"], input[name*="holdername"], input[autocomplete="cc-name"], input[aria-label*="name on card"], input[aria-label*="cardholder"]',
         addressLine1: 'input[name="billingAddressLine1"], input[name="addressLine1"], input[name="address"], input[autocomplete*="address-line1"], input[id*="address"]',
         addressLine2: 'input[name="billingAddressLine2"], input[name="addressLine2"], input[autocomplete*="address-line2"]',
         city: 'input[name="billingLocality"], input[name="city"], input[autocomplete*="city"], input[id*="city"]',
@@ -12,93 +13,116 @@ const config = {
         state: 'input[name="billingAdministrativeArea"], select[name="state"], input[id*="state"], select[autocomplete*="state"]',
         postalCode: 'input[name="billingPostalCode"], input[name="postalCode"], input[name="zip"], input[autocomplete*="postal-code"], input[id*="zip"]',
         phone: 'input[name="phone"], input[id*="phone"], input[autocomplete*="tel"]',
-        cardNumber: 'input[name="cardNumber"], input[name*="card"], input[data-elements-stable-field-name*="cardNumber"], input[aria-label*="card"], input[placeholder*="card"], iframe[name*="card"]',
+        
+        // Card Details (for initial fill)
+        cardNumber: 'input[name="cardNumber"], input[name*="card-number"], input[data-elements-stable-field-name*="cardNumber"], input[aria-label*="card number"], input[placeholder*="card number"], iframe[name*="card"]',
         cardExpiry: 'input[name="cardExpiry"], input[name*="expir"], input[data-elements-stable-field-name*="cardExpiry"], input[aria-label*="expir"], input[placeholder*="MM"], iframe[name*="expir"]',
-        cardCvc: 'input[name="cardCvc"], input[name*="cvc"], input[name*="cvv"], input[data-elements-stable-field-name*="cardCvc"], input[aria-label*="CVC"], input[placeholder*="CVC"], iframe[name*="cvc"]',
-        email: 'input[type="email"], input[name="email"], input[autocomplete*="email"]'
+        cardCvc: 'input[name="cardCvc"], input[name*="cvc"], input[name*="cvv"], input[data-elements-stable-field-name*="cardCvc"], input[aria-label*="CVC"], input[placeholder*="CVC"], iframe[name*="cvc"]'
     },
-    defaultAddress: {
-        name: "𝘿𝘼𝙉𝙂𝙀𝙍 𝘿𝘼𝘿𝘿𝙔",
-        addressLine1: "123 Main Street",
-        addressLine2: "Apt 4B",
-        city: "New York",
-        country: "US",
-        state: "NY",
-        postalCode: "10001",
-        phone: "+1 234-567-8900"
+
+    // Predefined card details
+    cardDefaults: {
+        cardNumber: '4242424242424242',
+        cardExpiry: '12/32',
+        cardCvc: '000'
     }
 };
 
-// Wait for the page to fully load before attempting to autofill
-window.onload = function() {
-    console.log("🚀 Page loaded. Starting autofill process.");
-    setTimeout(autofillCheckoutForm, 2000); // Small delay to ensure elements are loaded
+// Random data generators
+const randomData = {
+    firstNames: ['John', 'Michael', 'David', 'James', 'Robert', 'William', 'Joseph', 'Thomas', 'Christopher', 'Daniel'],
+    lastNames: ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Rodriguez', 'Martinez']
 };
 
-// Function to handle iframe fields
-function handleIframeFields() {
-    console.log("🔍 Searching for iframe fields...");
-    const iframes = document.querySelectorAll('iframe[name*="card"], iframe[name*="expir"], iframe[name*="cvc"]');
-    
-    iframes.forEach(iframe => {
-        try {
-            const input = iframe.contentDocument.querySelector('input');
-            if (input) {
-                if (iframe.name.includes('card')) {
-                    fillField(input, generateCardNumber());
-                    console.log("💳 Card number filled in iframe");
-                }
-                if (iframe.name.includes('expir')) {
-                    fillField(input, generateExpiryDate());
-                    console.log("📅 Expiry date filled in iframe");
-                }
-                if (iframe.name.includes('cvc')) {
-                    fillField(input, generateCVC());
-                    console.log("🔒 CVC filled in iframe");
-                }
-            }
-        } catch (e) {
-            console.log("⚠️ Cross-origin iframe access restricted", e);
-        }
-    });
+// Generate random name
+function generateRandomName() {
+    const firstName = randomData.firstNames[Math.floor(Math.random() * randomData.firstNames.length)];
+    const lastName = randomData.lastNames[Math.floor(Math.random() * randomData.lastNames.length)];
+    return `${firstName} ${lastName}`;
 }
 
-// Function to unlock readonly and disabled fields
-function unlockFields() {
-    const fields = document.querySelectorAll('input[disabled], select[disabled], input[readonly], select[readonly]');
-    fields.forEach(field => {
-        field.removeAttribute('disabled');
-        field.removeAttribute('readonly');
-        console.log("🔓 Unlocked field:", field);
-    });
-}
+// Wait for the page to fully load
+window.onload = function() {
+    console.log("🚀 Page loaded. Starting autofill process.");
+    setTimeout(autofillCheckoutForm, 2000);
+};
 
 // Function to autofill checkout form fields
 function autofillCheckoutForm() {
     try {
         console.log("🔍 Starting comprehensive form fill...");
         
-        // First unlock any locked fields
-        unlockFields();
+        // Generate random name for this session
+        const randomName = generateRandomName();
+        
+        // Prepare form data
+        const formData = {
+            name: randomName,
+            cardholderName: randomName, // Use same random name for cardholder
+            addressLine1: '123 Main Street',
+            addressLine2: 'OK',
+            city: 'Macao',
+            state: 'Macau',
+            country: 'MO',
+            postalCode: '999078',
+            phone: '+1 234-567-8900',
+            ...config.cardDefaults // Include predefined card details
+        };
 
-        // Handle iframe fields first
-        handleIframeFields();
-
-        // Fill regular fields
+        // Fill regular fields first
         Object.entries(config.fields).forEach(([key, selector]) => {
-            const field = document.querySelector(selector);
-            if (field && key !== 'email') { // Skip email as per requirement
-                let value = config.defaultAddress[key] || generateRandomValue(key);
-                fillField(field, value);
-                console.log(`✅ Filled ${key} field`);
-            }
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                if (element) {
+                    fillField(element, formData[key] || '');
+                    console.log(`✅ Filled ${key} field with: ${formData[key]}`);
+                }
+            });
         });
 
-        console.log("✨ Form filling complete");
+        // Handle iframes
+        handleIframeFields(formData);
 
+        console.log("✨ Form filling complete with random name and predefined data");
     } catch (error) {
         console.error("❌ Autofill error:", error);
     }
+}
+
+// Handle iframe fields
+function handleIframeFields(formData) {
+    const iframes = document.querySelectorAll('iframe');
+    iframes.forEach(iframe => {
+        try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            if (!doc) return;
+
+            // Handle cardholder name in iframes
+            const cardholderNameInput = doc.querySelector('input[placeholder*="card holder"], input[placeholder*="cardholder"]');
+            if (cardholderNameInput) {
+                fillField(cardholderNameInput, formData.cardholderName);
+                console.log('✅ Filled cardholder name in iframe');
+            }
+
+            // Fill card fields in iframes
+            if (iframe.name.includes('card')) {
+                const input = doc.querySelector('input');
+                if (input && !input.placeholder?.toLowerCase().includes('name')) {
+                    fillField(input, formData.cardNumber);
+                }
+            }
+            if (iframe.name.includes('expir')) {
+                const input = doc.querySelector('input');
+                if (input) fillField(input, formData.cardExpiry);
+            }
+            if (iframe.name.includes('cvc')) {
+                const input = doc.querySelector('input');
+                if (input) fillField(input, formData.cardCvc);
+            }
+        } catch (e) {
+            // Silent fail for cross-origin iframes
+        }
+    });
 }
 
 // Helper function to fill a field with a value
@@ -116,72 +140,21 @@ function fillField(element, value) {
     }
 }
 
-// Function to generate random values based on field type
-function generateRandomValue(fieldType) {
-    switch (fieldType) {
-        case 'cardNumber':
-            return generateCardNumber();
-        case 'cardExpiry':
-            return generateExpiryDate();
-        case 'cardCvc':
-            return generateCVC();
-        case 'phone':
-            return generateRandomPhoneNumber();
-        case 'postalCode':
-            return generateRandomZIP();
-        case 'state':
-            return generateRandomState();
-        case 'city':
-            return generateRandomCity();
-        default:
-            return config.defaultAddress[fieldType] || '';
-    }
-}
-
-// Existing helper functions with improvements
-function generateRandomName() {
-    return "𝘿𝘼𝙉𝙂𝙀𝙍 𝘿𝘼𝘿𝘿𝙔";
-}
-
-function generateCardNumber() {
-    // This should be replaced with your actual card number generation logic
-    return "4242424242424242";
-}
-
-function generateExpiryDate() {
-    const month = String(Math.floor(Math.random() * 12) + 1).padStart(2, '0');
-    const year = String(new Date().getFullYear() + 1).slice(-2);
-    return `${month}${year}`;
-}
-
-function generateCVC() {
-    return String(Math.floor(Math.random() * 900) + 100);
-}
-
-function generateRandomPhoneNumber() {
-    return `+1 ${Math.floor(100 + Math.random() * 900)}-${Math.floor(100 + Math.random() * 900)}-${Math.floor(1000 + Math.random() * 9000)}`;
-}
-
-function generateRandomZIP() {
-    return `${Math.floor(10000 + Math.random() * 90000)}`;
-}
-
-function generateRandomCity() {
-    const cities = ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"];
-    return cities[Math.floor(Math.random() * cities.length)];
-}
-
-function generateRandomState() {
-    const states = ["CA", "NY", "TX", "FL", "WA", "IL"];
-    return states[Math.floor(Math.random() * states.length)];
-}
-
 // Add MutationObserver to handle dynamically loaded elements
 const observer = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
         if (mutation.addedNodes.length) {
-            console.log("🔄 New elements detected, checking for form fields...");
-            autofillCheckoutForm();
+            const hasNewFormFields = Array.from(mutation.addedNodes).some(node => 
+                node.nodeType === 1 && // Element node
+                Object.values(config.fields).some(selector => 
+                    node.matches?.(selector) || node.querySelector?.(selector)
+                )
+            );
+            
+            if (hasNewFormFields) {
+                console.log("🔄 New form fields detected, filling...");
+                autofillCheckoutForm();
+            }
         }
     });
 });
@@ -191,4 +164,4 @@ observer.observe(document.body, {
     subtree: true
 });
 
-console.log("✅ Autofill script execution completed.");
+console.log("✅ Autofill script ready.");
