@@ -1,210 +1,38 @@
-console.log("✅ Stripe Autofill Script Loaded");
-
-// Default configuration
-const DEFAULT_CONFIG = {
-    primaryBIN: "424242",
-    expiryYearOffset: 3,
-    debugMode: true
-};
-
-// Track injected frames to prevent duplicate injections
-const injectedFrames = new Set();
-
-// Improved storage access
-function getStorageData(key) {
-    return new Promise((resolve) => {
-        try {
-            if (window.chrome && chrome.runtime && chrome.runtime.id) {
-                chrome.storage.local.get([key], function(result) {
-                    if (chrome.runtime.lastError) {
-                        console.warn("⚠ Storage access error:", chrome.runtime.lastError);
-                        resolve(null);
-                    } else {
-                        resolve(result[key]);
-                    }
-                });
-            } else {
-                resolve(null);
-            }
-        } catch (error) {
-            console.warn("⚠ Storage access failed:", error);
-            resolve(null);
+console.log("Checking script execution...");
+// Retrieve the BIN from Chrome Storage
+function getUserBIN(callback) {
+    chrome.storage.sync.get(["primaryBIN", "secondaryBIN"], function(result) {
+        if (result.primaryBIN) {
+            console.log("Using primary BIN");
+            callback(result.primaryBIN);
+        } else if (result.secondaryBIN) {
+            console.log("Primary BIN not found, using secondary BIN");
+            callback(result.secondaryBIN);
+        } else {
+            console.warn("⚠ No BIN found in settings. Using default test BIN.");
+            callback("48478345"); // Fallback BIN if none is provided
         }
     });
 }
 
-// Enhanced frame detection
-function findStripeFrames() {
-    return Array.from(document.querySelectorAll('iframe'))
-        .filter(frame => {
-            return (frame.name?.startsWith('__privateStripeFrame') || 
-                   frame.src?.includes('js.stripe.com')) &&
-                   !injectedFrames.has(frame); // Only return frames we haven't injected into yet
-        });
-}
+// Function to generate a card number using the provided BIN
+function generateCardNumber(callback) {
+    getUserBIN(function(bin) {
+        let cardNumber = bin; // Start with the user-provided BIN
+        let remainingLength = 16 - bin.length; // Ensure card number is 16 digits
 
-// Generate payment data
-async function generatePaymentData() {
-    const bin = await getStorageData('primaryBIN') || DEFAULT_CONFIG.primaryBIN;
-    const cardNumber = await generateCardNumber(bin);
-    
-    return {
-        cardNumber,
-        expiry: generateExpiryDate(),
-        cvc: generateCVV()
-    };
-}
-
-// Card number generation
-async function generateCardNumber(bin) {
-    try {
-        let cardNumber = bin;
-        const remainingLength = 16 - bin.length;
-
+        // Generate random remaining digits
         for (let i = 0; i < remainingLength - 1; i++) {
             cardNumber += Math.floor(Math.random() * 10);
         }
 
-        return cardNumber + calculateLuhnCheckDigit(cardNumber);
-    } catch (error) {
-        console.error("❌ Error generating card number:", error);
-        return DEFAULT_CONFIG.primaryBIN + "4242424242";
-    }
+        // Calculate Luhn check digit
+        cardNumber += calculateLuhnCheckDigit(cardNumber);
+        callback(cardNumber);
+    });
 }
 
-// Improved Stripe frame injection with deduplication
-function injectIntoStripeFrame(frame, data) {
-    // Check if we've already injected into this frame
-    if (injectedFrames.has(frame)) {
-        console.log("⚠ Frame already injected, skipping...");
-        return;
-    }
-
-    try {
-        const script = `
-            (function() {
-                // Prevent multiple injections
-                if (window.__stripeAutofillInjected) return;
-                window.__stripeAutofillInjected = true;
-
-                const fillData = ${JSON.stringify(data)};
-                
-                function simulateInput(element, value) {
-                    if (!element) return;
-                    
-                    const events = ['focus', 'input', 'change', 'blur'];
-                    element.focus();
-                    element.value = value;
-                    
-                    events.forEach(eventType => {
-                        element.dispatchEvent(new Event(eventType, { bubbles: true }));
-                    });
-                }
-                
-                function fillFields() {
-                    const selectors = {
-                        cardNumber: '[name="cardnumber"], [data-elements-stable-field-name="cardNumber"]',
-                        expiry: '[name="exp-date"], [data-elements-stable-field-name="cardExpiry"]',
-                        cvc: '[name="cvc"], [data-elements-stable-field-name="cardCvc"]'
-                    };
-
-                    const fields = {
-                        cardNumber: document.querySelector(selectors.cardNumber),
-                        expiry: document.querySelector(selectors.expiry),
-                        cvc: document.querySelector(selectors.cvc)
-                    };
-
-                    if (fields.cardNumber) simulateInput(fields.cardNumber, fillData.cardNumber);
-                    if (fields.expiry) simulateInput(fields.expiry, fillData.expiry);
-                    if (fields.cvc) simulateInput(fields.cvc, fillData.cvc);
-                }
-
-                // Initial fill attempt
-                fillFields();
-
-                // Watch for dynamic field additions
-                const observer = new MutationObserver((mutations) => {
-                    for (const mutation of mutations) {
-                        if (mutation.addedNodes.length) {
-                            fillFields();
-                        }
-                    }
-                });
-
-                observer.observe(document.body, { 
-                    childList: true, 
-                    subtree: true 
-                });
-            })();
-        `;
-
-        frame.contentWindow.postMessage({
-            type: 'stripe-autofill',
-            script: script
-        }, '*');
-
-        // Mark this frame as injected
-        injectedFrames.add(frame);
-        console.log("📤 Successfully injected autofill script into Stripe frame");
-    } catch (error) {
-        console.error("❌ Failed to inject into frame:", error);
-    }
-}
-
-// Main autofill function
-async function fillPaymentDetails() {
-    try {
-        console.log("🔍 Searching for Stripe payment fields...");
-        
-        let attempts = 0;
-        const maxAttempts = 10;
-        const checkInterval = 500;
-        
-        const attemptFill = async () => {
-            const stripeFrames = findStripeFrames();
-            
-            if (stripeFrames.length > 0) {
-                console.log(`✅ Found ${stripeFrames.length} new Stripe frame(s)`);
-                
-                const paymentData = await generatePaymentData();
-                
-                for (const frame of stripeFrames) {
-                    if (frame.contentWindow) {
-                        injectIntoStripeFrame(frame, paymentData);
-                    } else {
-                        frame.addEventListener('load', () => {
-                            injectIntoStripeFrame(frame, paymentData);
-                        }, { once: true }); // Ensure the listener only fires once
-                    }
-                }
-                
-                return stripeFrames.length > 0;
-            }
-            
-            return false;
-        };
-        
-        // Initial attempt
-        if (await attemptFill()) return;
-        
-        // Set up retry mechanism
-        const interval = setInterval(async () => {
-            attempts++;
-            
-            if (await attemptFill() || attempts >= maxAttempts) {
-                clearInterval(interval);
-                if (attempts >= maxAttempts) {
-                    console.log("⚠ Max attempts reached for finding Stripe frames");
-                }
-            }
-        }, checkInterval);
-        
-    } catch (error) {
-        console.error("❌ Payment autofill error:", error);
-    }
-}
-
-// Utility functions remain unchanged
+// Function to calculate Luhn check digit
 function calculateLuhnCheckDigit(number) {
     let sum = 0;
     let alternate = false;
@@ -220,26 +48,104 @@ function calculateLuhnCheckDigit(number) {
     return (sum * 9) % 10;
 }
 
+// Generate random expiry date (1-2 years in the future)
 function generateExpiryDate() {
-    const now = new Date();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = now.getFullYear() + Math.floor(Math.random() * 3) + 2;
-    return `${month}/${String(year).slice(-2)}`;
+    const currentDate = new Date();
+    const month = Math.floor(Math.random() * 12) + 1;
+    const year = currentDate.getFullYear() + Math.floor(Math.random() * 2) + 1;
+    return `${month.toString().padStart(2, '0')}${(year % 100).toString().padStart(2, '0')}`;
 }
 
+// Generate random CVV
 function generateCVV() {
-    return String(Math.floor(Math.random() * 900) + 100);
+    return Math.floor(100 + Math.random() * 900).toString();
 }
 
-// Initialize
-function initialize() {
-    console.log("🚀 Initializing Stripe autofill...");
-    fillPaymentDetails();
+// Generate random name
+function generateRandomName() {
+    const firstNames = ["John", "Jane", "Alex", "Sarah", "Michael", "Emma"];
+    const lastNames = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia"];
+    return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
 }
 
-// Start when ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initialize);
-} else {
-    initialize();
+// Helper function to fill field
+function fillField(element, value) {
+    element.focus();
+    element.value = value;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.dispatchEvent(new Event("blur", { bubbles: true }));
 }
+
+// Modify `fillPaymentDetails` to use dynamically generated card numbers
+function fillPaymentDetails() {
+    try {
+        console.log("🔍 Searching for payment fields...");
+
+        let iframes = document.querySelectorAll("iframe");
+
+        if (iframes.length === 0) {
+            console.warn("⚠ No iframes found. Autofill might not work.");
+            return;
+        }
+
+        for (let iframe of iframes) {
+            try {
+                let doc = iframe.contentDocument || iframe.contentWindow.document;
+                if (!doc) {
+                    console.error("❌ Unable to access iframe document.");
+                    continue;
+                }
+
+                // Autofill Card Number
+                let cardNumberField = doc.querySelector('input[name="cardnumber"], input[id*="card"]');
+                if (cardNumberField) {
+                    generateCardNumber(function (generatedCardNumber) {
+                        fillField(cardNumberField, generatedCardNumber);
+                        console.log("💳 Card number autofilled:", generatedCardNumber);
+                    });
+                }
+
+                // Autofill Expiry Date
+                let expiryField = doc.querySelector('input[name="exp-date"], input[id*="exp"]');
+                if (expiryField) {
+                    fillField(expiryField, generateExpiryDate());
+                    console.log("📆 Expiry date autofilled.");
+                }
+
+                // Autofill CVC
+                let cvcField = doc.querySelector('input[name="cvc"], input[id*="cvc"]');
+                if (cvcField) {
+                    fillField(cvcField, generateCVV());
+                    console.log("🔒 CVC autofilled.");
+                }
+
+                // Autofill Name on Card
+                let nameField = doc.querySelector('input[name="name"], input[id*="name"]');
+                if (nameField) {
+                    fillField(nameField, generateRandomName());
+                    console.log("📝 Cardholder name autofilled.");
+                }
+
+            } catch (iframeError) {
+                console.error("❌ Error processing iframe:", iframeError);
+            }
+        }
+    } catch (error) {
+        console.error("❌ Payment autofill error:", error);
+    }
+}
+
+// Add keyboard shortcut to switch BINs (Alt+B)
+document.addEventListener('keydown', function(e) {
+    if (e.altKey && e.key === 'b') {
+        chrome.storage.sync.get(["primaryBIN", "secondaryBIN", "currentBIN"], function(result) {
+            const currentBIN = result.currentBIN || "primary";
+            const newBIN = currentBIN === "primary" ? "secondary" : "primary";
+            chrome.storage.sync.set({ currentBIN: newBIN }, function() {
+                console.log(`🔄 Switched to ${newBIN} BIN`);
+                fillPaymentDetails(); // Refill with new BIN
+            });
+        });
+    }
+});
