@@ -7,11 +7,13 @@ const DEFAULT_CONFIG = {
     debugMode: true
 };
 
-// Improved storage access with better error handling
+// Track injected frames to prevent duplicate injections
+const injectedFrames = new Set();
+
+// Improved storage access
 function getStorageData(key) {
     return new Promise((resolve) => {
         try {
-            // Check if we're in a content script context
             if (window.chrome && chrome.runtime && chrome.runtime.id) {
                 chrome.storage.local.get([key], function(result) {
                     if (chrome.runtime.lastError) {
@@ -35,12 +37,13 @@ function getStorageData(key) {
 function findStripeFrames() {
     return Array.from(document.querySelectorAll('iframe'))
         .filter(frame => {
-            return frame.name?.startsWith('__privateStripeFrame') || 
-                   frame.src?.includes('js.stripe.com');
+            return (frame.name?.startsWith('__privateStripeFrame') || 
+                   frame.src?.includes('js.stripe.com')) &&
+                   !injectedFrames.has(frame); // Only return frames we haven't injected into yet
         });
 }
 
-// Improved card data generation
+// Generate payment data
 async function generatePaymentData() {
     const bin = await getStorageData('primaryBIN') || DEFAULT_CONFIG.primaryBIN;
     const cardNumber = await generateCardNumber(bin);
@@ -52,7 +55,7 @@ async function generatePaymentData() {
     };
 }
 
-// Modified card number generation
+// Card number generation
 async function generateCardNumber(bin) {
     try {
         let cardNumber = bin;
@@ -69,40 +72,65 @@ async function generateCardNumber(bin) {
     }
 }
 
-// Improved Stripe frame communication
+// Improved Stripe frame injection with deduplication
 function injectIntoStripeFrame(frame, data) {
+    // Check if we've already injected into this frame
+    if (injectedFrames.has(frame)) {
+        console.log("⚠ Frame already injected, skipping...");
+        return;
+    }
+
     try {
-        // Create a script to handle autofill
         const script = `
             (function() {
+                // Prevent multiple injections
+                if (window.__stripeAutofillInjected) return;
+                window.__stripeAutofillInjected = true;
+
                 const fillData = ${JSON.stringify(data)};
                 
                 function simulateInput(element, value) {
                     if (!element) return;
                     
-                    // Focus the element
+                    const events = ['focus', 'input', 'change', 'blur'];
                     element.focus();
-                    
-                    // Set the value
                     element.value = value;
                     
-                    // Trigger events
-                    ['input', 'change', 'blur'].forEach(eventType => {
+                    events.forEach(eventType => {
                         element.dispatchEvent(new Event(eventType, { bubbles: true }));
                     });
                 }
                 
-                // Wait for elements and fill them
-                const observer = new MutationObserver(() => {
-                    const cardNumber = document.querySelector('[name="cardnumber"], [data-elements-stable-field-name="cardNumber"]');
-                    const expiry = document.querySelector('[name="exp-date"], [data-elements-stable-field-name="cardExpiry"]');
-                    const cvc = document.querySelector('[name="cvc"], [data-elements-stable-field-name="cardCvc"]');
-                    
-                    if (cardNumber) simulateInput(cardNumber, fillData.cardNumber);
-                    if (expiry) simulateInput(expiry, fillData.expiry);
-                    if (cvc) simulateInput(cvc, fillData.cvc);
+                function fillFields() {
+                    const selectors = {
+                        cardNumber: '[name="cardnumber"], [data-elements-stable-field-name="cardNumber"]',
+                        expiry: '[name="exp-date"], [data-elements-stable-field-name="cardExpiry"]',
+                        cvc: '[name="cvc"], [data-elements-stable-field-name="cardCvc"]'
+                    };
+
+                    const fields = {
+                        cardNumber: document.querySelector(selectors.cardNumber),
+                        expiry: document.querySelector(selectors.expiry),
+                        cvc: document.querySelector(selectors.cvc)
+                    };
+
+                    if (fields.cardNumber) simulateInput(fields.cardNumber, fillData.cardNumber);
+                    if (fields.expiry) simulateInput(fields.expiry, fillData.expiry);
+                    if (fields.cvc) simulateInput(fields.cvc, fillData.cvc);
+                }
+
+                // Initial fill attempt
+                fillFields();
+
+                // Watch for dynamic field additions
+                const observer = new MutationObserver((mutations) => {
+                    for (const mutation of mutations) {
+                        if (mutation.addedNodes.length) {
+                            fillFields();
+                        }
+                    }
                 });
-                
+
                 observer.observe(document.body, { 
                     childList: true, 
                     subtree: true 
@@ -110,13 +138,14 @@ function injectIntoStripeFrame(frame, data) {
             })();
         `;
 
-        // Inject the script into the frame
         frame.contentWindow.postMessage({
             type: 'stripe-autofill',
             script: script
         }, '*');
 
-        console.log("📤 Injected autofill script into Stripe frame");
+        // Mark this frame as injected
+        injectedFrames.add(frame);
+        console.log("📤 Successfully injected autofill script into Stripe frame");
     } catch (error) {
         console.error("❌ Failed to inject into frame:", error);
     }
@@ -128,29 +157,28 @@ async function fillPaymentDetails() {
         console.log("🔍 Searching for Stripe payment fields...");
         
         let attempts = 0;
-        const maxAttempts = 20;
+        const maxAttempts = 10;
         const checkInterval = 500;
         
         const attemptFill = async () => {
             const stripeFrames = findStripeFrames();
             
             if (stripeFrames.length > 0) {
-                console.log(`✅ Found ${stripeFrames.length} Stripe frame(s)`);
+                console.log(`✅ Found ${stripeFrames.length} new Stripe frame(s)`);
                 
                 const paymentData = await generatePaymentData();
                 
                 for (const frame of stripeFrames) {
-                    frame.addEventListener('load', () => {
-                        injectIntoStripeFrame(frame, paymentData);
-                    });
-                    
-                    // Also try immediate injection if frame is already loaded
                     if (frame.contentWindow) {
                         injectIntoStripeFrame(frame, paymentData);
+                    } else {
+                        frame.addEventListener('load', () => {
+                            injectIntoStripeFrame(frame, paymentData);
+                        }, { once: true }); // Ensure the listener only fires once
                     }
                 }
                 
-                return true;
+                return stripeFrames.length > 0;
             }
             
             return false;
@@ -176,7 +204,7 @@ async function fillPaymentDetails() {
     }
 }
 
-// Utility functions (unchanged)
+// Utility functions remain unchanged
 function calculateLuhnCheckDigit(number) {
     let sum = 0;
     let alternate = false;
