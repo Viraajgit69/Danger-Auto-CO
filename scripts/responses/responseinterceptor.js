@@ -1,58 +1,60 @@
 (() => {
     console.log("[STRIPE INTERCEPTOR] Initializing...");
 
-    // Enhanced Configuration
     const CONFIG = {
-        STRIPE_ENDPOINTS: {
-            API_BASE: 'api.stripe.com',
+        ENDPOINTS: {
+            STRIPE_API: 'api.stripe.com',
             PAYMENT_PAGES: '/v1/payment_pages',
-            PAYMENT_CONFIRM: '/confirm',
             ANALYTICS: 'r.stripe.com/b',
+            DEPLOY_STATUS: '.deploy_status_henson.json',
+            MERCHANT_UI: 'merchant-ui-api.stripe.com',
+            COOKIES: 'checkout-cookies.stripe.com'
         },
-        INJECTION_FLAGS: {
-            shouldInjectCard: false,
-            isProcessing: false
-        }
+        DEBUG: true
     };
 
-    // State Management
-    let currentPaymentSession = {
-        sessionId: null,
-        paymentInfo: null,
-        timestamp: null
-    };
-
-    // Enhanced Response Interceptor
     const ResponseInterceptor = {
         init() {
             this.interceptFetch();
             this.interceptXHR();
-            this.setupMessageHandlers();
             console.log("[STRIPE INTERCEPTOR] Interceptor initialized");
         },
 
-        interceptFetch() {
+        shouldProcessResponse(url) {
+            // Only process specific endpoints
+            return url.includes(CONFIG.ENDPOINTS.STRIPE_API) && 
+                   !url.includes(CONFIG.ENDPOINTS.ANALYTICS) &&
+                   !url.includes(CONFIG.ENDPOINTS.DEPLOY_STATUS);
+        },
+
+        async interceptFetch() {
             const originalFetch = window.fetch;
             window.fetch = async (...args) => {
                 const url = args[0]?.url || args[0];
                 
                 if (typeof url === 'string') {
-                    console.log("[STRIPE INTERCEPTOR] Fetch intercepted:", url);
+                    CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] Fetch intercepted:", url);
                     
-                    if (this.isStripeEndpoint(url)) {
+                    const response = await originalFetch.apply(window, args);
+
+                    if (this.shouldProcessResponse(url)) {
                         try {
-                            const response = await originalFetch.apply(window, args);
                             const clonedResponse = response.clone();
+                            const contentType = response.headers.get('content-type');
                             
-                            // Process response asynchronously
-                            this.processResponse(url, clonedResponse);
-                            
-                            return response;
+                            if (contentType && contentType.includes('application/json')) {
+                                const jsonData = await clonedResponse.json();
+                                this.processStripeResponse(url, jsonData);
+                            }
                         } catch (error) {
-                            console.error("[STRIPE INTERCEPTOR] Fetch error:", error);
-                            throw error;
+                            // Only log actual processing errors, not expected non-JSON responses
+                            if (this.shouldProcessResponse(url)) {
+                                console.warn("[STRIPE INTERCEPTOR] Process error:", error.message);
+                            }
                         }
                     }
+                    
+                    return response;
                 }
                 
                 return originalFetch.apply(window, args);
@@ -63,6 +65,7 @@
             const XHR = XMLHttpRequest.prototype;
             const originalOpen = XHR.open;
             const originalSend = XHR.send;
+            const self = this;
 
             XHR.open = function(...args) {
                 this._url = args[1];
@@ -70,133 +73,135 @@
             };
 
             XHR.send = function(...args) {
-                if (this._url && ResponseInterceptor.isStripeEndpoint(this._url)) {
-                    console.log("[STRIPE INTERCEPTOR] XHR intercepted:", this._url);
+                if (this._url && self.shouldProcessResponse(this._url)) {
+                    CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] XHR intercepted:", this._url);
                     
                     this.addEventListener('load', function() {
-                        ResponseInterceptor.processXHRResponse(this);
+                        try {
+                            const contentType = this.getResponseHeader('content-type');
+                            if (contentType && contentType.includes('application/json')) {
+                                const data = JSON.parse(this.responseText);
+                                self.processStripeResponse(this._url, data);
+                            }
+                        } catch (error) {
+                            console.warn("[STRIPE INTERCEPTOR] XHR process error:", error.message);
+                        }
                     });
                 }
                 return originalSend.apply(this, args);
             };
         },
 
-        async processResponse(url, response) {
-            try {
-                const data = await response.json();
-                console.log("[STRIPE INTERCEPTOR] Processing response from:", url);
-
-                if (url.includes(CONFIG.STRIPE_ENDPOINTS.PAYMENT_PAGES)) {
-                    if (url.includes(CONFIG.STRIPE_ENDPOINTS.PAYMENT_CONFIRM)) {
-                        this.handlePaymentConfirmation(data);
-                    } else {
-                        this.handlePaymentSession(data);
-                    }
-                }
-
-                // Process analytics endpoint
-                if (url.includes(CONFIG.STRIPE_ENDPOINTS.ANALYTICS)) {
-                    console.log("[STRIPE INTERCEPTOR] Processing JSON response data");
-                }
-
-            } catch (error) {
-                console.warn("[STRIPE INTERCEPTOR] Failed to process response:", error);
-            }
-        },
-
-        processXHRResponse(xhr) {
-            try {
-                const data = JSON.parse(xhr.responseText);
-                console.log("[STRIPE INTERCEPTOR] Processing response from:", xhr._url);
-                
-                if (xhr._url.includes(CONFIG.STRIPE_ENDPOINTS.PAYMENT_PAGES)) {
-                    this.handlePaymentSession(data);
-                }
-            } catch (error) {
-                console.warn("[STRIPE INTERCEPTOR] Failed to process XHR response:", error);
-            }
-        },
-
-        handlePaymentSession(data) {
+        processStripeResponse(url, data) {
             if (!data) return;
 
+            CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] Processing response from:", url);
+
+            // Handle different response types
+            if (url.includes('/init')) {
+                this.handleInitResponse(data);
+            } else if (url.includes('/confirm')) {
+                this.handleConfirmResponse(data);
+            } else if (url.includes(CONFIG.ENDPOINTS.PAYMENT_PAGES)) {
+                this.handlePaymentPageResponse(data);
+            }
+        },
+
+        handleInitResponse(data) {
             const paymentInfo = {
                 amountDue: data.amount || null,
                 currency: data.currency?.toLowerCase() || 'usd',
                 customerEmail: data.customer_email || null,
                 successUrl: data.success_url || window.location.origin,
-                businessUrl: window.location.origin,
+                businessUrl: window.location.hostname,
                 timestamp: new Date().toISOString()
             };
 
-            console.log("[STRIPE INTERCEPTOR] Payment info extracted:", JSON.stringify(paymentInfo));
+            CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] Payment info extracted:", 
+                JSON.stringify(paymentInfo));
 
-            // Store session data
-            currentPaymentSession = {
-                sessionId: data.id,
-                paymentInfo,
-                timestamp: new Date().toISOString()
-            };
-
-            // Notify content script
+            // Send message to page
             window.postMessage({
-                type: 'PAYMENT_INFO_DETECTED',
+                type: 'STRIPE_PAYMENT_INFO',
                 paymentInfo
             }, '*');
 
-            // Notify extension
-            chrome.runtime.sendMessage({
-                type: 'PAYMENT_INFO_DETECTED',
-                paymentInfo
-            });
-
-            // Modify checkout page appearance if needed
-            this.modifyCheckoutAppearance();
-        },
-
-        handlePaymentConfirmation(data) {
-            console.log("[STRIPE INTERCEPTOR] Payment confirmation intercepted");
-            
-            if (data.error) {
-                console.log("[STRIPE INTERCEPTOR] Payment error:", data.error.message);
-                chrome.runtime.sendMessage({
-                    type: 'PAYMENT_ERROR',
-                    error: data.error
-                });
-            } else if (data.next_action) {
-                console.log("[STRIPE INTERCEPTOR] Payment requires additional action");
-                chrome.runtime.sendMessage({
-                    type: 'PAYMENT_ACTION_REQUIRED',
-                    action: data.next_action
-                });
-            } else if (data.status === 'succeeded') {
-                console.log("[STRIPE INTERCEPTOR] Payment successful");
-                chrome.runtime.sendMessage({
-                    type: 'PAYMENT_SUCCESS',
-                    data: data
-                });
+            // Try to send message to extension if in extension context
+            try {
+                if (chrome?.runtime?.id) {
+                    chrome.runtime.sendMessage({
+                        type: 'STRIPE_PAYMENT_INFO',
+                        paymentInfo
+                    });
+                }
+            } catch (e) {
+                // Ignore chrome.runtime errors in non-extension context
             }
         },
 
-        modifyCheckoutAppearance() {
-            console.log("[STRIPE INTERCEPTOR] Modifying branding colors");
-            // Add any custom styling if needed
+        handleConfirmResponse(data) {
+            if (data.error) {
+                this.handleError(data.error);
+            } else if (data.next_action) {
+                this.handleNextAction(data.next_action);
+            } else if (data.status === 'succeeded') {
+                this.handleSuccess(data);
+            }
         },
 
-        isStripeEndpoint(url) {
-            return url.includes(CONFIG.STRIPE_ENDPOINTS.API_BASE) || 
-                   url.includes(CONFIG.STRIPE_ENDPOINTS.ANALYTICS);
+        handlePaymentPageResponse(data) {
+            if (data.id && data.payment_intent_client_secret) {
+                const sessionInfo = {
+                    id: data.id,
+                    clientSecret: data.payment_intent_client_secret,
+                    livemode: data.livemode
+                };
+
+                window.postMessage({
+                    type: 'STRIPE_SESSION_INFO',
+                    sessionInfo
+                }, '*');
+            }
         },
 
-        setupMessageHandlers() {
-            window.addEventListener('message', (event) => {
-                if (event.data?.type === 'PAYMENT_INFO_DETECTED') {
-                    console.log("Payment info received:", event.data.paymentInfo);
-                }
-            });
+        handleError(error) {
+            console.warn("[STRIPE INTERCEPTOR] Payment error:", error.message);
+            window.postMessage({
+                type: 'STRIPE_ERROR',
+                error
+            }, '*');
+        },
+
+        handleNextAction(nextAction) {
+            console.log("[STRIPE INTERCEPTOR] Next action required:", nextAction.type);
+            window.postMessage({
+                type: 'STRIPE_NEXT_ACTION',
+                action: nextAction
+            }, '*');
+        },
+
+        handleSuccess(data) {
+            console.log("[STRIPE INTERCEPTOR] Payment succeeded");
+            window.postMessage({
+                type: 'STRIPE_SUCCESS',
+                data
+            }, '*');
         }
     };
 
-    // Initialize the interceptor
+    // Initialize
     ResponseInterceptor.init();
+
+    // Listen for page messages
+    window.addEventListener('message', (event) => {
+        if (event.data?.type?.startsWith('STRIPE_')) {
+            try {
+                if (chrome?.runtime?.id) {
+                    chrome.runtime.sendMessage(event.data);
+                }
+            } catch (e) {
+                // Ignore chrome.runtime errors in non-extension context
+            }
+        }
+    });
 })();
