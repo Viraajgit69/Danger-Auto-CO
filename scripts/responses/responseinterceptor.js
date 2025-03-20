@@ -1,89 +1,202 @@
-(function () {
-    // Function to create and display the error box
-    function showErrorMessage(errorText) {
-        let existingBox = document.getElementById("payment-failure-box");
-        if (!existingBox) {
-            let errorBox = document.createElement("div");
-            errorBox.id = "payment-failure-box";
-            errorBox.style.position = "fixed";
-            errorBox.style.top = "20px";
-            errorBox.style.right = "20px";
-            errorBox.style.backgroundColor = "#121826";
-            errorBox.style.color = "#fff";
-            errorBox.style.padding = "15px 20px";
-            errorBox.style.borderRadius = "8px";
-            errorBox.style.boxShadow = "0px 0px 10px rgba(0,0,0,0.3)";
-            errorBox.style.display = "flex";
-            errorBox.style.alignItems = "center";
-            errorBox.style.fontSize = "16px";
-            errorBox.style.zIndex = "9999";
+(() => {
+    console.log("[STRIPE INTERCEPTOR] Initializing...");
 
-            let icon = document.createElement("span");
-            icon.innerHTML = "❌";
-            icon.style.marginRight = "10px";
-            icon.style.fontSize = "18px";
-
-            let message = document.createElement("span");
-            message.innerText = `Payment Declined\nCode: ${errorText}`;
-
-            errorBox.appendChild(icon);
-            errorBox.appendChild(message);
-            document.body.appendChild(errorBox);
-
-            // Remove the message after 5 seconds
-            setTimeout(() => {
-                errorBox.remove();
-            }, 5000);
-        } else {
-            existingBox.innerText = `Payment Declined\nCode: ${errorText}`;
+    // Enhanced Configuration
+    const CONFIG = {
+        STRIPE_ENDPOINTS: {
+            API_BASE: 'api.stripe.com',
+            PAYMENT_PAGES: '/v1/payment_pages',
+            PAYMENT_CONFIRM: '/confirm',
+            ANALYTICS: 'r.stripe.com/b',
+        },
+        INJECTION_FLAGS: {
+            shouldInjectCard: false,
+            isProcessing: false
         }
-    }
+    };
 
-    // Function to observe checkout page for payment failures
-    function observeFailureMessages() {
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                if (mutation.addedNodes.length) {
-                    mutation.addedNodes.forEach((node) => {
-                        if (node.innerText) {
-                            let text = node.innerText.toLowerCase();
-                            let failureReasons = [
-                                "generic decline",
-                                "fraudulent",
-                                "insufficient funds",
-                                "transaction not allowed",
-                                "do not honor",
-                                "stolen card",
-                                "lost card",
-                            ];
+    // State Management
+    let currentPaymentSession = {
+        sessionId: null,
+        paymentInfo: null,
+        timestamp: null
+    };
 
-                            failureReasons.forEach((reason) => {
-                                if (text.includes(reason)) {
-                                    showErrorMessage(reason);
-                                }
-                            });
+    // Enhanced Response Interceptor
+    const ResponseInterceptor = {
+        init() {
+            this.interceptFetch();
+            this.interceptXHR();
+            this.setupMessageHandlers();
+            console.log("[STRIPE INTERCEPTOR] Interceptor initialized");
+        },
+
+        interceptFetch() {
+            const originalFetch = window.fetch;
+            window.fetch = async (...args) => {
+                const url = args[0]?.url || args[0];
+                
+                if (typeof url === 'string') {
+                    console.log("[STRIPE INTERCEPTOR] Fetch intercepted:", url);
+                    
+                    if (this.isStripeEndpoint(url)) {
+                        try {
+                            const response = await originalFetch.apply(window, args);
+                            const clonedResponse = response.clone();
+                            
+                            // Process response asynchronously
+                            this.processResponse(url, clonedResponse);
+                            
+                            return response;
+                        } catch (error) {
+                            console.error("[STRIPE INTERCEPTOR] Fetch error:", error);
+                            throw error;
                         }
+                    }
+                }
+                
+                return originalFetch.apply(window, args);
+            };
+        },
+
+        interceptXHR() {
+            const XHR = XMLHttpRequest.prototype;
+            const originalOpen = XHR.open;
+            const originalSend = XHR.send;
+
+            XHR.open = function(...args) {
+                this._url = args[1];
+                return originalOpen.apply(this, args);
+            };
+
+            XHR.send = function(...args) {
+                if (this._url && ResponseInterceptor.isStripeEndpoint(this._url)) {
+                    console.log("[STRIPE INTERCEPTOR] XHR intercepted:", this._url);
+                    
+                    this.addEventListener('load', function() {
+                        ResponseInterceptor.processXHRResponse(this);
                     });
                 }
-            });
-        });
+                return originalSend.apply(this, args);
+            };
+        },
 
-        // Wait until document.body is available before observing
-        function waitForBody() {
-            if (document.body) {
-                observer.observe(document.body, {
-                    childList: true,
-                    subtree: true,
-                });
-            } else {
-                setTimeout(waitForBody, 50); // Retry after 50ms
+        async processResponse(url, response) {
+            try {
+                const data = await response.json();
+                console.log("[STRIPE INTERCEPTOR] Processing response from:", url);
+
+                if (url.includes(CONFIG.STRIPE_ENDPOINTS.PAYMENT_PAGES)) {
+                    if (url.includes(CONFIG.STRIPE_ENDPOINTS.PAYMENT_CONFIRM)) {
+                        this.handlePaymentConfirmation(data);
+                    } else {
+                        this.handlePaymentSession(data);
+                    }
+                }
+
+                // Process analytics endpoint
+                if (url.includes(CONFIG.STRIPE_ENDPOINTS.ANALYTICS)) {
+                    console.log("[STRIPE INTERCEPTOR] Processing JSON response data");
+                }
+
+            } catch (error) {
+                console.warn("[STRIPE INTERCEPTOR] Failed to process response:", error);
             }
+        },
+
+        processXHRResponse(xhr) {
+            try {
+                const data = JSON.parse(xhr.responseText);
+                console.log("[STRIPE INTERCEPTOR] Processing response from:", xhr._url);
+                
+                if (xhr._url.includes(CONFIG.STRIPE_ENDPOINTS.PAYMENT_PAGES)) {
+                    this.handlePaymentSession(data);
+                }
+            } catch (error) {
+                console.warn("[STRIPE INTERCEPTOR] Failed to process XHR response:", error);
+            }
+        },
+
+        handlePaymentSession(data) {
+            if (!data) return;
+
+            const paymentInfo = {
+                amountDue: data.amount || null,
+                currency: data.currency?.toLowerCase() || 'usd',
+                customerEmail: data.customer_email || null,
+                successUrl: data.success_url || window.location.origin,
+                businessUrl: window.location.origin,
+                timestamp: new Date().toISOString()
+            };
+
+            console.log("[STRIPE INTERCEPTOR] Payment info extracted:", JSON.stringify(paymentInfo));
+
+            // Store session data
+            currentPaymentSession = {
+                sessionId: data.id,
+                paymentInfo,
+                timestamp: new Date().toISOString()
+            };
+
+            // Notify content script
+            window.postMessage({
+                type: 'PAYMENT_INFO_DETECTED',
+                paymentInfo
+            }, '*');
+
+            // Notify extension
+            chrome.runtime.sendMessage({
+                type: 'PAYMENT_INFO_DETECTED',
+                paymentInfo
+            });
+
+            // Modify checkout page appearance if needed
+            this.modifyCheckoutAppearance();
+        },
+
+        handlePaymentConfirmation(data) {
+            console.log("[STRIPE INTERCEPTOR] Payment confirmation intercepted");
+            
+            if (data.error) {
+                console.log("[STRIPE INTERCEPTOR] Payment error:", data.error.message);
+                chrome.runtime.sendMessage({
+                    type: 'PAYMENT_ERROR',
+                    error: data.error
+                });
+            } else if (data.next_action) {
+                console.log("[STRIPE INTERCEPTOR] Payment requires additional action");
+                chrome.runtime.sendMessage({
+                    type: 'PAYMENT_ACTION_REQUIRED',
+                    action: data.next_action
+                });
+            } else if (data.status === 'succeeded') {
+                console.log("[STRIPE INTERCEPTOR] Payment successful");
+                chrome.runtime.sendMessage({
+                    type: 'PAYMENT_SUCCESS',
+                    data: data
+                });
+            }
+        },
+
+        modifyCheckoutAppearance() {
+            console.log("[STRIPE INTERCEPTOR] Modifying branding colors");
+            // Add any custom styling if needed
+        },
+
+        isStripeEndpoint(url) {
+            return url.includes(CONFIG.STRIPE_ENDPOINTS.API_BASE) || 
+                   url.includes(CONFIG.STRIPE_ENDPOINTS.ANALYTICS);
+        },
+
+        setupMessageHandlers() {
+            window.addEventListener('message', (event) => {
+                if (event.data?.type === 'PAYMENT_INFO_DETECTED') {
+                    console.log("Payment info received:", event.data.paymentInfo);
+                }
+            });
         }
+    };
 
-        // Start checking for body
-        waitForBody();
-    }
-
-    // Run the observer when the script loads
-    observeFailureMessages();
+    // Initialize the interceptor
+    ResponseInterceptor.init();
 })();
