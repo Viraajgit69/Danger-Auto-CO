@@ -25,16 +25,64 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     // Save settings
-    document.getElementById("save-settings").addEventListener("click", function () {
-        const primaryBinInput = document.getElementById("primary-bin-input").value.trim();
-        const secondaryBinInput = document.getElementById("secondary-bin-input").value.trim();
+    // Inside the existing save settings event listener
+// Inside the existing save settings event listener
+document.getElementById("save-settings").addEventListener("click", function () {
+    const primaryBinInput = document.getElementById("primary-bin-input").value.trim();
+    const secondaryBinInput = document.getElementById("secondary-bin-input").value.trim();
 
-        if (primaryBinInput && secondaryBinInput) {
-            showNotification("BIN settings saved successfully!", "success");
+    if (!primaryBinInput && !secondaryBinInput) {
+        showNotification("Please provide at least one BIN", "error");
+        return;
+    }
+
+    // Save to chrome.storage
+    chrome.storage.local.set({
+        primaryBIN: primaryBinInput || null,
+        secondaryBIN: secondaryBinInput || null,
+        extensionEnabled: true,
+        currentBIN: 'primary' // Start with primary BIN
+    }, function() {
+        if (chrome.runtime.lastError) {
+            showNotification("Failed to save BIN settings: " + chrome.runtime.lastError.message, "error");
         } else {
-            showNotification("Please fill in both Primary and Secondary BIN fields.", "error");
+            showNotification("BIN settings saved successfully!", "success");
         }
     });
+});
+
+// Load saved BINs when settings page opens
+document.addEventListener("DOMContentLoaded", function() {
+    chrome.storage.local.get(['primaryBIN', 'secondaryBIN', 'extensionEnabled'], function(result) {
+        if (result.primaryBIN) {
+            document.getElementById("primary-bin-input").value = result.primaryBIN;
+        }
+        if (result.secondaryBIN) {
+            document.getElementById("secondary-bin-input").value = result.secondaryBIN;
+        }
+        
+        const extensionToggle = document.getElementById("extension-toggle-input");
+        if (extensionToggle) {
+            extensionToggle.checked = result.extensionEnabled !== false;
+        }
+    });
+});
+
+// Extension toggle handler
+document.getElementById("extension-toggle-input").addEventListener("change", function() {
+    chrome.storage.local.set({
+        extensionEnabled: this.checked
+    }, function() {
+        if (chrome.runtime.lastError) {
+            showNotification("Failed to update extension state", "error");
+        } else {
+            showNotification(
+                this.checked ? "Extension enabled" : "Extension disabled",
+                this.checked ? "success" : "error"
+            );
+        }
+    }.bind(this));
+});
 
     document.getElementById("save-settings-cc").addEventListener("click", function () {
         const cardListInput = document.getElementById("card-list-input").value.trim();
