@@ -1,207 +1,157 @@
 (() => {
-    console.log("[STRIPE INTERCEPTOR] Initializing...");
-
     const CONFIG = {
-        ENDPOINTS: {
-            STRIPE_API: 'api.stripe.com',
-            PAYMENT_PAGES: '/v1/payment_pages',
-            ANALYTICS: 'r.stripe.com/b',
-            DEPLOY_STATUS: '.deploy_status_henson.json',
-            MERCHANT_UI: 'merchant-ui-api.stripe.com',
-            COOKIES: 'checkout-cookies.stripe.com'
-        },
-        DEBUG: true
+        VERSION: '1.4.1',
+        TIMESTAMP: '2025-03-21 04:16:36',
+        USER: 'Viraajgit69'
     };
 
-    const ResponseInterceptor = {
-        init() {
-            this.interceptFetch();
-            this.interceptXHR();
-            console.log("[STRIPE INTERCEPTOR] Interceptor initialized");
-        },
+    // State for tracking intercepted data
+    const state = {
+        lastResponse: null,
+        paymentInfo: null,
+        retryPaused: false
+    };
 
-        shouldProcessResponse(url) {
-            // Only process specific endpoints
-            return url.includes(CONFIG.ENDPOINTS.STRIPE_API) && 
-                   !url.includes(CONFIG.ENDPOINTS.ANALYTICS) &&
-                   !url.includes(CONFIG.ENDPOINTS.DEPLOY_STATUS);
-        },
-
-        async interceptFetch() {
-            const originalFetch = window.fetch;
-            window.fetch = async (...args) => {
-                const url = args[0]?.url || args[0];
-                
-                if (typeof url === 'string') {
-                    CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] Fetch intercepted:", url);
-                    
-                    const response = await originalFetch.apply(window, args);
-
-                    if (this.shouldProcessResponse(url)) {
-                        try {
-                            const clonedResponse = response.clone();
-                            const contentType = response.headers.get('content-type');
-                            
-                            if (contentType && contentType.includes('application/json')) {
-                                const jsonData = await clonedResponse.json();
-                                this.processStripeResponse(url, jsonData);
-                            }
-                        } catch (error) {
-                            // Only log actual processing errors, not expected non-JSON responses
-                            if (this.shouldProcessResponse(url)) {
-                                console.warn("[STRIPE INTERCEPTOR] Process error:", error.message);
-                            }
-                        }
-                    }
-                    
-                    return response;
-                }
-                
-                return originalFetch.apply(window, args);
-            };
-        },
-
-        interceptXHR() {
-            const XHR = XMLHttpRequest.prototype;
-            const originalOpen = XHR.open;
-            const originalSend = XHR.send;
-            const self = this;
-
-            XHR.open = function(...args) {
-                this._url = args[1];
-                return originalOpen.apply(this, args);
-            };
-
-            XHR.send = function(...args) {
-                if (this._url && self.shouldProcessResponse(this._url)) {
-                    CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] XHR intercepted:", this._url);
-                    
-                    this.addEventListener('load', function() {
-                        try {
-                            const contentType = this.getResponseHeader('content-type');
-                            if (contentType && contentType.includes('application/json')) {
-                                const data = JSON.parse(this.responseText);
-                                self.processStripeResponse(this._url, data);
-                            }
-                        } catch (error) {
-                            console.warn("[STRIPE INTERCEPTOR] XHR process error:", error.message);
-                        }
-                    });
-                }
-                return originalSend.apply(this, args);
-            };
-        },
-
-        processStripeResponse(url, data) {
-            if (!data) return;
-
-            CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] Processing response from:", url);
-
-            // Handle different response types
-            if (url.includes('/init')) {
-                this.handleInitResponse(data);
-            } else if (url.includes('/confirm')) {
-                this.handleConfirmResponse(data);
-            } else if (url.includes(CONFIG.ENDPOINTS.PAYMENT_PAGES)) {
-                this.handlePaymentPageResponse(data);
-            }
-        },
-
-        handleInitResponse(data) {
-            const paymentInfo = {
-                amountDue: data.amount || null,
-                currency: data.currency?.toLowerCase() || 'usd',
-                customerEmail: data.customer_email || null,
-                successUrl: data.success_url || window.location.origin,
-                businessUrl: window.location.hostname,
-                timestamp: new Date().toISOString()
-            };
-
-            CONFIG.DEBUG && console.log("[STRIPE INTERCEPTOR] Payment info extracted:", 
-                JSON.stringify(paymentInfo));
-
-            // Send message to page
-            window.postMessage({
-                type: 'STRIPE_PAYMENT_INFO',
-                paymentInfo
-            }, '*');
-
-            // Try to send message to extension if in extension context
+    // Stripe API interceptor
+    const originalFetch = window.fetch;
+    window.fetch = async function(url, options) {
+        if (url.includes('stripe.com')) {
+            console.log('[STRIPE INTERCEPTOR] Fetch intercepted:', url);
+            
             try {
-                if (chrome?.runtime?.id) {
-                    chrome.runtime.sendMessage({
-                        type: 'STRIPE_PAYMENT_INFO',
-                        paymentInfo
-                    });
+                const response = await originalFetch.apply(this, arguments);
+                const clonedResponse = response.clone();
+
+                // Process response based on URL
+                if (url.includes('/payment_methods') || 
+                    url.includes('/payment_pages') || 
+                    url.includes('/confirm')) {
+                    
+                    console.log('[STRIPE INTERCEPTOR] Processing response from:', url);
+                    
+                    try {
+                        const jsonData = await clonedResponse.json();
+                        console.log('[STRIPE INTERCEPTOR] Processing JSON response data');
+
+                        // Handle decline codes
+                        if (jsonData.error) {
+                            const declineCode = jsonData.error.decline_code || jsonData.error.code;
+                            if (declineCode) {
+                                console.log('[STRIPE INTERCEPTOR] Decline code found:', declineCode);
+                                handleDeclinedPayment(declineCode, jsonData.error);
+                            }
+                        }
+
+                        // Extract payment information
+                        if (url.includes('/payment_pages')) {
+                            const paymentInfo = {
+                                amountDue: jsonData.amount || 0,
+                                currency: jsonData.currency || 'usd',
+                                customerEmail: jsonData.customer_email || '',
+                                successUrl: jsonData.success_url || '',
+                                businessUrl: new URL(jsonData.success_url || '').origin,
+                                timestamp: CONFIG.TIMESTAMP
+                            };
+
+                            console.log('[STRIPE INTERCEPTOR] Payment info extracted:', JSON.stringify(paymentInfo));
+                            state.paymentInfo = paymentInfo;
+
+                            // Send payment info to other components
+                            chrome.runtime.sendMessage({
+                                type: 'PAYMENT_INFO',
+                                data: paymentInfo
+                            });
+                        }
+
+                        // Handle payment confirmation
+                        if (url.includes('/confirm')) {
+                            handlePaymentConfirmation(jsonData);
+                        }
+
+                    } catch (error) {
+                        console.error('Error processing response:', error);
+                    }
                 }
-            } catch (e) {
-                // Ignore chrome.runtime errors in non-extension context
+
+                return response;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                return originalFetch.apply(this, arguments);
             }
-        },
-
-        handleConfirmResponse(data) {
-            if (data.error) {
-                this.handleError(data.error);
-            } else if (data.next_action) {
-                this.handleNextAction(data.next_action);
-            } else if (data.status === 'succeeded') {
-                this.handleSuccess(data);
-            }
-        },
-
-        handlePaymentPageResponse(data) {
-            if (data.id && data.payment_intent_client_secret) {
-                const sessionInfo = {
-                    id: data.id,
-                    clientSecret: data.payment_intent_client_secret,
-                    livemode: data.livemode
-                };
-
-                window.postMessage({
-                    type: 'STRIPE_SESSION_INFO',
-                    sessionInfo
-                }, '*');
-            }
-        },
-
-        handleError(error) {
-            console.warn("[STRIPE INTERCEPTOR] Payment error:", error.message);
-            window.postMessage({
-                type: 'STRIPE_ERROR',
-                error
-            }, '*');
-        },
-
-        handleNextAction(nextAction) {
-            console.log("[STRIPE INTERCEPTOR] Next action required:", nextAction.type);
-            window.postMessage({
-                type: 'STRIPE_NEXT_ACTION',
-                action: nextAction
-            }, '*');
-        },
-
-        handleSuccess(data) {
-            console.log("[STRIPE INTERCEPTOR] Payment succeeded");
-            window.postMessage({
-                type: 'STRIPE_SUCCESS',
-                data
-            }, '*');
         }
+        return originalFetch.apply(this, arguments);
     };
+
+    function handleDeclinedPayment(declineCode, error) {
+        chrome.runtime.sendMessage({
+            type: 'CARD_DECLINED',
+            data: {
+                code: declineCode,
+                message: error.message,
+                timestamp: CONFIG.TIMESTAMP
+            }
+        });
+
+        if (!state.retryPaused) {
+            console.log('injectpayment.ts: Received PAUSE_RETRY message, pausing retries');
+            state.retryPaused = true;
+            
+            // Request new card after delay
+            setTimeout(() => {
+                chrome.runtime.sendMessage({ type: 'REQUEST_CARD' });
+                state.retryPaused = false;
+            }, 2000);
+        }
+    }
+
+    function handlePaymentConfirmation(jsonData) {
+        if (jsonData.status === 'succeeded') {
+            chrome.runtime.sendMessage({
+                type: 'PAYMENT_SUCCESS',
+                data: {
+                    ...state.paymentInfo,
+                    timestamp: CONFIG.TIMESTAMP
+                }
+            });
+        } else if (jsonData.error) {
+            handleDeclinedPayment(
+                jsonData.error.decline_code || jsonData.error.code,
+                jsonData.error
+            );
+        }
+    }
+
+    // Branding modification
+    function modifyBranding() {
+        console.log('[STRIPE INTERCEPTOR] Modifying branding colors');
+        // Add your branding modification code here
+    }
 
     // Initialize
-    ResponseInterceptor.init();
-
-    // Listen for page messages
-    window.addEventListener('message', (event) => {
-        if (event.data?.type?.startsWith('STRIPE_')) {
-            try {
-                if (chrome?.runtime?.id) {
-                    chrome.runtime.sendMessage(event.data);
-                }
-            } catch (e) {
-                // Ignore chrome.runtime errors in non-extension context
+    function initialize() {
+        // Set up observers and initial state
+        const observer = new MutationObserver(() => {
+            if (state.paymentInfo) {
+                modifyBranding();
             }
-        }
-    });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        console.log('Response interceptor initialized:', {
+            version: CONFIG.VERSION,
+            timestamp: CONFIG.TIMESTAMP,
+            user: CONFIG.USER
+        });
+    }
+
+    // Start when document is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initialize);
+    } else {
+        initialize();
+    }
 })();
