@@ -1,29 +1,49 @@
 console.log("✅ Background script loaded.");
 
-// Configuration
 const CONFIG = {
-    TIMESTAMP: '2025-03-21 04:33:51',
-    USER: 'Viraajgit69',
     BOT_TOKEN: "7890377108:AAFgiveInFKUPhn7S8t7zNRjZMQZn-1rKVk",
     ADMIN_ID: "7345260405"
 };
 
+// State management
+const state = {
+    processing: false
+};
+
 // Card Generation System
 const CardGenerator = {
-    generateCard() {
-        return new Promise((resolve) => {
-            chrome.storage.local.get(['primaryBIN', 'secondaryBIN'], (result) => {
-                const bin = result.primaryBIN || '402766'; // Use primary BIN or default
-                const card = this.generateFromBin(bin);
-                resolve(card);
+    async generateCard() {
+        return new Promise(async (resolve) => {
+            const result = await chrome.storage.local.get(['primaryBIN', 'secondaryBIN', 'extensionEnabled']);
+            
+            if (!result.extensionEnabled) {
+                console.log('Extension is disabled');
+                resolve(null);
+                return;
+            }
+
+            if (!result.primaryBIN && !result.secondaryBIN) {
+                console.log('No BIN configured');
+                resolve(null);
+                return;
+            }
+
+            const bin = result.primaryBIN || result.secondaryBIN;
+            const card = this.generateFromBin(bin);
+            
+            console.log('Generated new card:', {
+                number: card.number,
+                month: card.month,
+                year: card.year,
+                cvv: '***'
             });
+            
+            resolve(card);
         });
     },
 
     generateFromBin(bin) {
         let cardNumber = bin;
-        
-        // Generate remaining digits
         while (cardNumber.length < 15) {
             cardNumber += Math.floor(Math.random() * 10);
         }
@@ -58,32 +78,35 @@ const CardGenerator = {
     }
 };
 
-// Listen for messages from the extension
+// Message Handler
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    // Existing OTP handler
     if (message.action === "send_otp" && message.telegramId) {
         sendOTPToTelegram(message.telegramId, sendResponse);
         return true;
     }
 
-    // New card request handler
     if (message.type === "REQUEST_CARD") {
+        console.log("Received card request from tab:", sender.tab.id);
+        if (state.processing) {
+            console.log("Card generation already in progress");
+            return true;
+        }
+        
+        state.processing = true;
         CardGenerator.generateCard().then(card => {
+            state.processing = false;
+            if (!card) {
+                chrome.tabs.sendMessage(sender.tab.id, {
+                    type: 'CARD_ERROR',
+                    error: 'Failed to generate card. Please check your BIN configuration.'
+                });
+                return;
+            }
+
             chrome.tabs.sendMessage(sender.tab.id, {
                 type: 'CARD_DATA',
-                card: card,
-                timestamp: CONFIG.TIMESTAMP
+                card: card
             });
-
-            // Notify via Telegram
-            sendTelegramMessage(
-                `🔄 New Card Generated\n\n` +
-                `💳 Card: ${card.number}\n` +
-                `📅 Exp: ${card.month}/${card.year}\n` +
-                `🔐 CVV: ${card.cvv}\n` +
-                `🕒 Time: ${CONFIG.TIMESTAMP}\n` +
-                `👤 User: ${CONFIG.USER}`
-            );
         });
         return true;
     }
@@ -92,10 +115,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Function to send OTP request to Telegram
 function sendOTPToTelegram(telegramId, sendResponse) {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
     chrome.storage.local.set({ otp: otp }, function() {
         console.log('Generated OTP:', otp);
-
         sendTelegramMessage(
             `🔐 Your OTP Code\n\n` +
             `Code: ${otp}\n` +
@@ -103,7 +124,6 @@ function sendOTPToTelegram(telegramId, sendResponse) {
             `Powered by Danger Auto Co 💪`,
             telegramId
         );
-
         sendResponse({ success: true });
     });
 }
@@ -116,7 +136,7 @@ function handlePaymentSuccess(cardDetails, amount) {
                 `💰 Payment Successful!\n\n` +
                 `💳 Card: ${cardDetails.cardNumber || 'N/A'}\n` +
                 `💵 Amount: ${amount}\n` +
-                `📅 Date: ${CONFIG.TIMESTAMP}\n\n` +
+                `📅 Date: ${new Date().toISOString().replace('T', ' ').split('.')[0]}\n\n` +
                 `Powered by Danger Auto Co 💪`,
                 result.telegramSettings.telegramId
             );
