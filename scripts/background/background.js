@@ -7,23 +7,30 @@ const CONFIG = {
 
 // State management
 const state = {
-    processing: false
+    processing: false,
+    verifiedTelegram: false
 };
 
 // Card Generation System
 const CardGenerator = {
     async generateCard() {
         return new Promise(async (resolve) => {
-            const result = await chrome.storage.local.get(['primaryBIN', 'secondaryBIN', 'extensionEnabled']);
+            const result = await chrome.storage.local.get(['primaryBIN', 'secondaryBIN', 'extensionEnabled', 'telegramVerified']);
             
             if (!result.extensionEnabled) {
-                console.log('Extension is disabled');
+                sendNotificationToContent("Extension is disabled", "error");
+                resolve(null);
+                return;
+            }
+
+            if (!result.telegramVerified) {
+                sendNotificationToContent("Please verify your Telegram account first", "error");
                 resolve(null);
                 return;
             }
 
             if (!result.primaryBIN && !result.secondaryBIN) {
-                console.log('No BIN configured');
+                sendNotificationToContent("No BIN configured. Please set up a BIN in settings.", "error");
                 resolve(null);
                 return;
             }
@@ -31,12 +38,15 @@ const CardGenerator = {
             const bin = result.primaryBIN || result.secondaryBIN;
             const card = this.generateFromBin(bin);
             
-            console.log('Generated new card:', {
-                number: card.number,
-                month: card.month,
-                year: card.year,
-                cvv: '***'
-            });
+            if (card) {
+                sendNotificationToContent("Card generated successfully", "success");
+                console.log('Generated new card:', {
+                    number: card.number,
+                    month: card.month,
+                    year: card.year,
+                    cvv: '***'
+                });
+            }
             
             resolve(card);
         });
@@ -78,6 +88,75 @@ const CardGenerator = {
     }
 };
 
+// Notification System
+function sendNotificationToContent(message, messageType = 'info') {
+    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        if (tabs[0]) {
+            chrome.scripting.executeScript({
+                target: { tabId: tabs[0].id },
+                func: (message, messageType) => {
+                    // Add Font Awesome if not present
+                    if (!document.querySelector('link[href*="font-awesome"]')) {
+                        const fontAwesomeLink = document.createElement('link');
+                        fontAwesomeLink.rel = 'stylesheet';
+                        fontAwesomeLink.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css';
+                        document.head.appendChild(fontAwesomeLink);
+                    }
+
+                    const toast = document.createElement('div');
+                    Object.assign(toast.style, {
+                        position: 'fixed',
+                        top: '70px',
+                        right: '20px',
+                        background: 'rgba(10, 10, 15, 0.95)',
+                        color: '#fff',
+                        padding: '10px 15px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        zIndex: '1000000',
+                        boxShadow: '0 0 10px rgba(0, 0, 0, 0.3)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        backdropFilter: 'blur(5px)',
+                        fontFamily: 'Arial, sans-serif',
+                        fontWeight: '500',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        transition: 'all 0.2s ease'
+                    });
+
+                    let iconClass = '';
+                    let iconColor = '';
+                    if (messageType === 'success') {
+                        iconClass = 'fas fa-check-circle';
+                        iconColor = '#4caf50';
+                    } else if (messageType === 'error') {
+                        iconClass = 'fas fa-times-circle';
+                        iconColor = '#ff4d4d';
+                    } else {
+                        iconClass = 'fas fa-info-circle';
+                        iconColor = '#2196f3';
+                    }
+
+                    const icon = document.createElement('i');
+                    icon.className = iconClass;
+                    icon.style.color = iconColor;
+                    icon.style.opacity = '0.8';
+
+                    toast.appendChild(icon);
+                    toast.appendChild(document.createTextNode(message));
+                    document.body.appendChild(toast);
+
+                    setTimeout(() => toast.remove(), 2500);
+                },
+                args: [message, messageType]
+            }).catch(error => {
+                console.error('Notification error:', error);
+            });
+        }
+    });
+}
+
 // Message Handler
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "send_otp" && message.telegramId) {
@@ -88,7 +167,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "REQUEST_CARD") {
         console.log("Received card request from tab:", sender.tab.id);
         if (state.processing) {
-            console.log("Card generation already in progress");
+            sendNotificationToContent("Card generation already in progress", "info");
             return true;
         }
         
@@ -98,7 +177,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (!card) {
                 chrome.tabs.sendMessage(sender.tab.id, {
                     type: 'CARD_ERROR',
-                    error: 'Failed to generate card. Please check your BIN configuration.'
+                    error: 'Failed to generate card. Please check your settings.'
                 });
                 return;
             }
@@ -107,7 +186,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 type: 'CARD_DATA',
                 card: card
             });
+
+            // Log success to Telegram if enabled
+            chrome.storage.local.get(['telegramSettings'], function(result) {
+                if (result.telegramSettings?.autoNotify) {
+                    handlePaymentSuccess(card, "Card Generated");
+                }
+            });
         });
+        return true;
+    }
+
+    if (message.type === "VERIFY_TELEGRAM") {
+        verifyTelegramUser(message.telegramId, message.otp, sendResponse);
         return true;
     }
 });
@@ -125,6 +216,26 @@ function sendOTPToTelegram(telegramId, sendResponse) {
             telegramId
         );
         sendResponse({ success: true });
+    });
+}
+
+// Function to verify Telegram user
+function verifyTelegramUser(telegramId, otp, sendResponse) {
+    chrome.storage.local.get(['otp'], function(result) {
+        const isValid = result.otp === otp;
+        if (isValid) {
+            chrome.storage.local.set({ 
+                telegramVerified: true,
+                telegramId: telegramId
+            }, function() {
+                state.verifiedTelegram = true;
+                sendNotificationToContent("Telegram verification successful!", "success");
+                sendResponse({ success: true });
+            });
+        } else {
+            sendNotificationToContent("Invalid OTP. Please try again.", "error");
+            sendResponse({ success: false, error: "Invalid OTP" });
+        }
     });
 }
 
@@ -169,6 +280,20 @@ function sendTelegramMessage(message, chatId = CONFIG.ADMIN_ID) {
     });
 }
 
+// Extension initialization
 chrome.action.onClicked.addListener(() => {
     chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+});
+
+// Storage change listener
+chrome.storage.onChanged.addListener(function(changes, namespace) {
+    for (let [key, { oldValue, newValue }] of Object.entries(changes)) {
+        if (key === 'extensionEnabled') {
+            if (newValue) {
+                sendNotificationToContent("Extension enabled", "success");
+            } else {
+                sendNotificationToContent("Extension disabled", "error");
+            }
+        }
+    }
 });
